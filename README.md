@@ -46,6 +46,52 @@ docker compose down -v
 
 > Si `go run .` dice `go.mod file not found`, estás en la carpeta equivocada: entra primero a `saga-coreografia`.
 
+### Consultas a las bases de datos
+
+Cada base vive en su contenedor; `scripts/consultar.ps1` entra con `docker compose exec` y ejecuta `psql` (el cliente de PostgreSQL que trae la imagen). Las consultas están en `consultas/*.sql`.
+
+```bash
+.\scripts\consultar.ps1 order
+```
+
+```bash
+.\scripts\consultar.ps1 inventory
+```
+
+```bash
+.\scripts\consultar.ps1 payment
+```
+
+Seguir un pedido (una saga completa) por las 3 bases:
+
+```bash
+.\scripts\consultar.ps1 -Pedido ORD-002
+```
+
+Una consulta propia, o la consola interactiva de psql (salir con `\q`):
+
+```bash
+.\scripts\consultar.ps1 order -Sql "SELECT id, status FROM orders"
+```
+
+```bash
+.\scripts\consultar.ps1 payment -Consola
+```
+
+Herramientas gráficas (DBeaver, pgAdmin, extensión PostgreSQL de VS Code): levantar con el archivo opcional que abre cada base solo en tu computador:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dbtools.yml up -d
+```
+
+| Base | Host | Puerto | Base de datos | Usuario | Contraseña |
+|---|---|---|---|---|---|
+| Order | 127.0.0.1 | 5441 | orders | order_svc | order_pass |
+| Inventory | 127.0.0.1 | 5442 | inventory | inventory_svc | inventory_pass |
+| Payment | 127.0.0.1 | 5443 | payments | payment_svc | payment_pass |
+
+Los productos y clientes con prefijo `prod-` y `cliente-` los crean las pruebas automáticas.
+
 ## 2. Arquitectura
 
 | Contenedor | Imagen | Puerto | Volumen | Redes |

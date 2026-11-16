@@ -34,6 +34,7 @@ services:
       POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD:-order_pass}
     volumes:
       - order-data:/var/lib/postgresql/data
+      - ./consultas:/consultas:ro # scripts de consulta (solo lectura)
     networks: [order-net]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U order_svc -d orders"]
@@ -64,6 +65,7 @@ services:
       POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory_pass}
     volumes:
       - inventory-data:/var/lib/postgresql/data
+      - ./consultas:/consultas:ro
     networks: [inventory-net]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U inventory_svc -d inventory"]
@@ -94,6 +96,7 @@ services:
       POSTGRES_PASSWORD: ${PAYMENT_DB_PASSWORD:-payment_pass}
     volumes:
       - payment-data:/var/lib/postgresql/data
+      - ./consultas:/consultas:ro
     networks: [payment-net]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U payment_svc -d payments"]

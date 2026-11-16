@@ -1,0 +1,15 @@
+# OPCIONAL, solo para desarrollo: abre cada base de datos en un puerto de TU
+# computador (127.0.0.1, no accesible desde la red) para conectar herramientas
+# gráficas como DBeaver, pgAdmin o la extensión PostgreSQL de VS Code.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dbtools.yml up -d
+#
+# En el despliegue normal (docker compose up) las bases NO publican puertos:
+# solo su propio servicio puede alcanzarlas.
+services:
+  order-db:
+    ports: ["127.0.0.1:5441:5432"]
+  inventory-db:
+    ports: ["127.0.0.1:5442:5432"]
+  payment-db:
+    ports: ["127.0.0.1:5443:5432"]

@@ -1,4 +1,4 @@
-# Ejecuta localmente los mismos controles que el pipeline de CI y guarda la
+﻿# Ejecuta localmente los mismos controles que el pipeline de CI y guarda la
 # evidencia en la carpeta "evidencia". Requiere Docker Desktop encendido.
 #   Uso:  powershell -ExecutionPolicy Bypass -File scripts\verificar.ps1
 $ErrorActionPreference = "Stop"

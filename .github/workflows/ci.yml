@@ -47,6 +47,14 @@ jobs:
       - name: Demo de los 3 escenarios
         run: go run .
 
+      - name: Consultas SQL en cada base de datos
+        shell: pwsh
+        run: |
+          ./scripts/consultar.ps1 order
+          ./scripts/consultar.ps1 inventory
+          ./scripts/consultar.ps1 payment
+          ./scripts/consultar.ps1 -Pedido ORD-002
+
       - name: Persistencia - recrear contenedores sin borrar volúmenes
         run: |
           docker compose down
