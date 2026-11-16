@@ -1,6 +1,131 @@
+# Saga por coreografía: 3 microservicios + 3 bases de datos + 1 broker.
+#
+# Database per Service: cada servicio tiene SU Postgres, en SU contenedor, con
+# SU volumen y en SU red privada. Ningún servicio puede ver la base de datos de
+# otro; solo comparten el broker (red "broker-net").
+name: saga-coreografia
+
+x-db-healthcheck: &db-healthcheck
+  interval: 3s
+  timeout: 3s
+  retries: 20
+
 services:
-  saga:
-    build: .
-    image: saga-coreografia:latest
-    container_name: saga-coreografia
-    tty: true # conserva los colores de los logs por servicio
+  # ─────────────── Broker de mensajes ───────────────
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"] # JetStream con almacenamiento en disco
+    ports:
+      - "4222:4222" # clientes
+      - "8222:8222" # monitoreo HTTP
+    volumes:
+      - nats-data:/data
+    networks: [broker-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      <<: *db-healthcheck
+
+  # ─────────────── Order ───────────────
+  order-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: order_svc
+      POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD:-order_pass}
+    volumes:
+      - order-data:/var/lib/postgresql/data
+    networks: [order-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order_svc -d orders"]
+      <<: *db-healthcheck
+
+  order-service:
+    build:
+      context: .
+      args: { SERVICE: order }
+    image: saga-coreografia/order-service:latest
+    environment:
+      DATABASE_URL: postgres://order_svc:${ORDER_DB_PASSWORD:-order_pass}@order-db:5432/orders?sslmode=disable
+      NATS_URL: nats://nats:4222
+      NO_COLOR: "1"
+    ports: ["8081:8080"]
+    networks: [order-net, broker-net]
+    depends_on:
+      order-db: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    restart: unless-stopped
+
+  # ─────────────── Inventory ───────────────
+  inventory-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: inventory
+      POSTGRES_USER: inventory_svc
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory_pass}
+    volumes:
+      - inventory-data:/var/lib/postgresql/data
+    networks: [inventory-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory_svc -d inventory"]
+      <<: *db-healthcheck
+
+  inventory-service:
+    build:
+      context: .
+      args: { SERVICE: inventory }
+    image: saga-coreografia/inventory-service:latest
+    environment:
+      DATABASE_URL: postgres://inventory_svc:${INVENTORY_DB_PASSWORD:-inventory_pass}@inventory-db:5432/inventory?sslmode=disable
+      NATS_URL: nats://nats:4222
+      NO_COLOR: "1"
+    ports: ["8082:8080"]
+    networks: [inventory-net, broker-net]
+    depends_on:
+      inventory-db: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    restart: unless-stopped
+
+  # ─────────────── Payment ───────────────
+  payment-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: payment_svc
+      POSTGRES_PASSWORD: ${PAYMENT_DB_PASSWORD:-payment_pass}
+    volumes:
+      - payment-data:/var/lib/postgresql/data
+    networks: [payment-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_svc -d payments"]
+      <<: *db-healthcheck
+
+  payment-service:
+    build:
+      context: .
+      args: { SERVICE: payment }
+    image: saga-coreografia/payment-service:latest
+    environment:
+      DATABASE_URL: postgres://payment_svc:${PAYMENT_DB_PASSWORD:-payment_pass}@payment-db:5432/payments?sslmode=disable
+      NATS_URL: nats://nats:4222
+      NO_COLOR: "1"
+    ports: ["8083:8080"]
+    networks: [payment-net, broker-net]
+    depends_on:
+      payment-db: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    restart: unless-stopped
+
+# Un volumen por base de datos (+ uno para el broker): los datos sobreviven a
+# reinicios y recreación de contenedores, y cada uno escala y se respalda aparte.
+volumes:
+  order-data:
+  inventory-data:
+  payment-data:
+  nats-data:
+
+# Una red privada por servicio: order-service NO puede alcanzar inventory-db.
+networks:
+  broker-net:
+  order-net:
+  inventory-net:
+  payment-net:

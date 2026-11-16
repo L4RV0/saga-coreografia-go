@@ -1,81 +1,84 @@
-// Saga basada en Coreografía — caso "Black Friday" del video
+// Demo del patrón SAGA basado en Coreografía — caso "Black Friday" del video
 // "How Saga Pattern Solves Distributed Transactions in Microservices".
 //
-// Tres microservicios (Order, Inventory, Payment), cada uno con su propia base
-// de datos, que se coordinan SOLO mediante eventos en un broker. No existe un
-// orquestador central.
+// Los tres microservicios corren en Docker, cada uno con su propia base de
+// datos Postgres en su propio volumen, y se comunican solo por eventos en NATS.
+// Este programa actúa como "cliente": hace pedidos por HTTP y muestra el
+// estado final de cada base de datos.
+//
+//	docker compose up -d --build   # levanta los 7 contenedores
+//	go run .                       # ejecuta los 3 escenarios
+//	docker compose logs -f order-service inventory-service payment-service
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"time"
 
-	"saga-coreografia/internal/broker"
-	"saga-coreografia/internal/inventory"
+	"saga-coreografia/internal/client"
 	"saga-coreografia/internal/logx"
-	"saga-coreografia/internal/order"
-	"saga-coreografia/internal/payment"
 )
 
-// Productos de la tienda del video.
-var prices = map[string]float64{
-	"mystery-box": 29,
-	"runner-pro":  59,
-	"studio-buds": 99,
-}
-
-type system struct {
-	bus       *broker.InMemory
-	orders    *order.Service
-	inventory *inventory.Service
-	payments  *payment.Service
-}
-
-func newSystem(stock map[string]int, balances map[string]float64) *system {
-	bus := broker.NewInMemory()
-	return &system{
-		bus:       bus,
-		orders:    order.New(bus, prices),
-		inventory: inventory.New(bus, stock),
-		payments:  payment.New(bus, balances),
-	}
-}
-
 func main() {
-	sys := newSystem(
-		map[string]int{"mystery-box": 100, "runner-pro": 50, "studio-buds": 3},
-		map[string]float64{"Jeremy Delgado": 500, "Angel Alvarez": 20, "Erick Cevallos": 1000},
-	)
-	defer sys.bus.Close()
+	ctx := context.Background()
+	c := client.FromEnv()
 
-	run(sys, "ESCENARIO 1 · Camino feliz: Jeremy Delgado compra 1 Runner Pro", "Jeremy Delgado", "runner-pro", 1)
-	run(sys, "ESCENARIO 2 · Falla el pago (caso Black Friday): Angel Alvarez compra 1 Studio Buds", "Angel Alvarez", "studio-buds", 1)
-	run(sys, "ESCENARIO 3 · Sin stock: Erick Cevallos compra 5 Studio Buds", "Erick Cevallos", "studio-buds", 5)
+	fmt.Println("Conectando con los microservicios…")
+	if err := c.WaitReady(ctx, 60*time.Second); err != nil {
+		fmt.Println("error:", err)
+		os.Exit(1)
+	}
+
+	// Datos iniciales del caso (se reinician en cada demo para que sea repetible).
+	must(c.SetPrice(ctx, "runner-pro", 59))
+	must(c.SetPrice(ctx, "studio-buds", 99))
+	must(c.SetStock(ctx, "runner-pro", 50))
+	must(c.SetStock(ctx, "studio-buds", 3))
+	must(c.SetBalance(ctx, "Jeremy Delgado", 500))
+	must(c.SetBalance(ctx, "Angel Alvarez", 20))
+	must(c.SetBalance(ctx, "Erick Cevallos", 1000))
+
+	run(ctx, c, "ESCENARIO 1 · Camino feliz: Jeremy Delgado compra 1 Runner Pro", "Jeremy Delgado", "runner-pro", 1)
+	run(ctx, c, "ESCENARIO 2 · Falla el pago (caso Black Friday): Angel Alvarez compra 1 Studio Buds", "Angel Alvarez", "studio-buds", 1)
+	run(ctx, c, "ESCENARIO 3 · Sin stock: Erick Cevallos compra 5 Studio Buds", "Erick Cevallos", "studio-buds", 5)
+
+	fmt.Println("\nRecorrido de los eventos entre servicios:")
+	fmt.Println("  docker compose logs order-service inventory-service payment-service")
 }
 
-func run(sys *system, title, customer, product string, qty int) {
+func run(ctx context.Context, c *client.Client, title, customer, product string, qty int) {
 	logx.Title("═══ %s ═══", title)
-	stockBefore := sys.inventory.Stock(product)
-	balanceBefore := sys.payments.Balance(customer)
+	stockBefore, _ := c.Stock(ctx, product)
+	balanceBefore, _ := c.Balance(ctx, customer)
 
-	o, err := sys.orders.PlaceOrder(customer, product, qty)
+	o, err := c.PlaceOrder(ctx, customer, product, qty)
+	must(err)
+	fmt.Printf("  POST /orders → %s %s (la API responde al instante: la saga sigue sola)\n", o.ID, o.Status)
+
+	final, err := c.WaitFinal(ctx, o.ID, 15*time.Second)
+	must(err)
+	if final.Reason != "" {
+		fmt.Printf("  Motivo: %s\n", final.Reason)
+	}
+
+	payStatus := "— (nunca llegó a cobrarse)"
+	if p, err := c.GetPayment(ctx, o.ID); err == nil {
+		payStatus = p.Status
+	}
+	stockAfter, _ := c.Stock(ctx, product)
+	balanceAfter, _ := c.Balance(ctx, customer)
+
+	fmt.Printf("\n  Estado final en cada base de datos (cada una en su propio contenedor y volumen):\n")
+	fmt.Printf("  • order-db     → %s %s\n", final.ID, final.Status)
+	fmt.Printf("  • inventory-db → %s: %d → %d\n", product, stockBefore, stockAfter)
+	fmt.Printf("  • payment-db   → pago %s | saldo de %s: $%.2f → $%.2f\n", payStatus, customer, balanceBefore, balanceAfter)
+}
+
+func must(err error) {
 	if err != nil {
 		fmt.Println("error:", err)
-		return
+		os.Exit(1)
 	}
-
-	// La saga es ASÍNCRONA: PlaceOrder ya devolvió el pedido en PENDING.
-	// Esperamos a que el broker termine de repartir todos los eventos.
-	sys.bus.WaitIdle()
-
-	final, _ := sys.orders.Get(o.ID)
-	pay, hasPay := sys.payments.Get(o.ID)
-	payStatus := "— (nunca llegó a cobrarse)"
-	if hasPay {
-		payStatus = string(pay.Status)
-	}
-
-	fmt.Printf("\n  Estado final en cada base de datos:\n")
-	fmt.Printf("  • Order DB     → %s %s\n", final.ID, final.Status)
-	fmt.Printf("  • Inventory DB → %s: %d → %d\n", product, stockBefore, sys.inventory.Stock(product))
-	fmt.Printf("  • Payment DB   → pago %s | saldo de %s: $%.2f → $%.2f\n", payStatus, customer, balanceBefore, sys.payments.Balance(customer))
 }

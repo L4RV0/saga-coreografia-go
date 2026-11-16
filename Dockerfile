@@ -1,17 +1,19 @@
-# ---- Etapa 1: compilar y probar ----
-FROM golang:1.22-alpine AS build
+# Una sola receta para los tres microservicios: SERVICE elige cuál compilar
+# (order | inventory | payment).
+
+# ---- Etapa 1: compilar ----
+FROM golang:1.26-alpine AS build
 WORKDIR /src
-
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
-# Si una prueba falla, la imagen no se construye.
-RUN go vet ./... && go test ./...
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/saga .
+ARG SERVICE
+RUN test -n "$SERVICE" && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/${SERVICE}
 
-# ---- Etapa 2: imagen final mínima ----
+# ---- Etapa 2: imagen final mínima (sin shell, usuario sin privilegios) ----
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/saga /saga
+COPY --from=build /out/app /app
 USER nonroot:nonroot
-ENTRYPOINT ["/saga"]
+EXPOSE 8080
+HEALTHCHECK --interval=3s --timeout=3s --retries=20 CMD ["/app", "-healthcheck"]
+ENTRYPOINT ["/app"]

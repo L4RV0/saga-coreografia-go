@@ -1,6 +1,8 @@
 .git
 .github
 evidencia
-coverage.*
+e2e
+scripts
+*.md
+.env
 *.exe
-README.md

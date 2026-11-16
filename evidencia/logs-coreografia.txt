@@ -1,0 +1,21 @@
+[order]     ① Pedido ORD-001 creado (Jeremy Delgado, runner-pro x1, $59.00) → PENDING
+[order]     📨 OrderCreated      → saga.order (ORD-001)
+[inventory] ②③ ORD-001: reservadas 1 u. de runner-pro (quedan 49)
+[inventory] 📨 InventoryReserved → saga.inventory (ORD-001)
+[payment]   ④⑤ ORD-001: cobrados $59.00 a Jeremy Delgado (saldo $441.00)
+[payment]   📨 PaymentProcessed  → saga.payment (ORD-001)
+[order]     ⑥ Pago confirmado → pedido ORD-001 CONFIRMED
+[order]     ① Pedido ORD-002 creado (Angel Alvarez, studio-buds x1, $99.00) → PENDING
+[order]     📨 OrderCreated      → saga.order (ORD-002)
+[inventory] ②③ ORD-002: reservadas 1 u. de studio-buds (quedan 2)
+[inventory] 📨 InventoryReserved → saga.inventory (ORD-002)
+[payment]   ④ ORD-002 ✗ pago rechazado: fondos insuficientes (saldo $20.00, total $99.00)
+[inventory] ↩ COMPENSANDO ORD-002: liberadas 1 u. de studio-buds (quedan 3)
+[payment]   📨 PaymentFailed     → saga.payment (ORD-002)
+[order]     ↩ CancelOrder: pedido ORD-002 CANCELLED (fondos insuficientes (saldo $20.00, total $99.00))
+[inventory] 📨 StockReleased     → saga.inventory (ORD-002)
+[order]     ① Pedido ORD-003 creado (Erick Cevallos, studio-buds x5, $495.00) → PENDING
+[order]     📨 OrderCreated      → saga.order (ORD-003)
+[inventory] ② ORD-003 ✗ sin stock de studio-buds (hay 3, se piden 5)
+[inventory] 📨 InventoryRejected → saga.inventory (ORD-003)
+[order]     ↩ CancelOrder: pedido ORD-003 CANCELLED (sin stock de studio-buds (hay 3, se piden 5))

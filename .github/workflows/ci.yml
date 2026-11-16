@@ -6,45 +6,58 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Análisis, pruebas y cobertura
+  analisis:
+    name: Formato, análisis estático y compilación
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
-
+          go-version: "1.26"
       - name: Formato (gofmt)
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
-
       - name: Análisis estático (go vet)
-        run: go vet ./...
+        run: go vet ./... && go vet -tags e2e ./...
+      - name: Compilar los 3 servicios
+        run: go build ./...
 
-      - name: Pruebas con detector de condiciones de carrera
-        run: go test -race -count=1 -v -coverpkg=./... -coverprofile=coverage.out ./...
-
-      - name: Reporte de cobertura
-        run: |
-          go tool cover -func=coverage.out
-          go tool cover -html=coverage.out -o coverage.html
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cobertura
-          path: coverage.html
-
-      - name: Ejecutar la demo de los 3 escenarios
-        run: go run .
-
-  docker:
-    name: Imagen Docker
-    needs: test
+  e2e:
+    name: Docker Compose + pruebas de extremo a extremo
+    needs: analisis
     runs-on: ubuntu-latest
+    env:
+      NO_COLOR: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Construir imagen
-        run: docker build -t saga-coreografia:ci .
-      - name: Ejecutar contenedor
-        run: docker run --rm saga-coreografia:ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Levantar 3 servicios + 3 Postgres + NATS
+        run: docker compose up -d --build --wait
+
+      - name: Contenedores y volúmenes
+        run: |
+          docker compose ps
+          docker volume ls --filter name=saga-coreografia
+
+      - name: Pruebas de extremo a extremo (con detector de carreras)
+        run: go test -race -tags e2e -count=1 -v ./e2e
+
+      - name: Demo de los 3 escenarios
+        run: go run .
+
+      - name: Persistencia - recrear contenedores sin borrar volúmenes
+        run: |
+          docker compose down
+          docker compose up -d --wait
+          docker compose exec -T order-db psql -U order_svc -d orders \
+            -c "SELECT id, customer_id, status FROM orders WHERE id IN ('ORD-001','ORD-002','ORD-003') ORDER BY id;"
+
+      - name: Logs de la coreografía
+        if: always()
+        run: docker compose logs order-service inventory-service payment-service
+
+      - name: Apagar y limpiar
+        if: always()
+        run: docker compose down -v

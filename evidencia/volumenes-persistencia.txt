@@ -1,0 +1,48 @@
+### Volúmenes creados por docker compose
+saga-coreografia_inventory-data
+saga-coreografia_nats-data
+saga-coreografia_order-data
+saga-coreografia_payment-data
+
+### Montaje de cada base de datos
+order-db → volumen saga-coreografia_order-data en /var/lib/postgresql/data
+inventory-db → volumen saga-coreografia_inventory-data en /var/lib/postgresql/data
+payment-db → volumen saga-coreografia_payment-data en /var/lib/postgresql/data
+nats → volumen saga-coreografia_nats-data en /data
+
+### Antes de reiniciar: pedidos en order-db
+   id    |  customer_id   |  status   
+---------+----------------+-----------
+ ORD-001 | Jeremy Delgado | CONFIRMED
+ ORD-002 | Angel Alvarez  | CANCELLED
+ ORD-003 | Erick Cevallos | CANCELLED
+(3 rows)
+
+### docker compose down (borra TODOS los contenedores, conserva los volúmenes)
+contenedores y redes eliminados: 11
+ Container saga-coreografia-inventory-service-1 Healthy 
+
+### Después de recrear los contenedores: los datos siguen en los volúmenes
+   id    |  customer_id   |  status   
+---------+----------------+-----------
+ ORD-001 | Jeremy Delgado | CONFIRMED
+ ORD-002 | Angel Alvarez  | CANCELLED
+ ORD-003 | Erick Cevallos | CANCELLED
+(3 rows)
+
+ order_id | product_id  | quantity |  status  
+----------+-------------+----------+----------
+ ORD-001  | runner-pro  |        1 | RESERVED
+ ORD-002  | studio-buds |        1 | RELEASED
+(2 rows)
+
+ order_id |  customer_id   | amount | status 
+----------+----------------+--------+--------
+ ORD-001  | Jeremy Delgado |  59.00 | PAID
+ ORD-002  | Angel Alvarez  |  99.00 | FAILED
+(2 rows)
+
+### Aislamiento: desde la red de order no se alcanza inventory-db
+order-db:5432 - accepting connections
+inventory-db:5432 - no response
+(código de salida 2)

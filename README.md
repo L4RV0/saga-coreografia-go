@@ -1,121 +1,149 @@
-# Patrón SAGA basado en Coreografía — Go
+# Patrón SAGA basado en Coreografía — Go + Docker
 
 Implementación del caso **"Black Friday"** del video *How Saga Pattern Solves Distributed Transactions in Microservices* (Visualcoders).
 
-## 1. El problema (lo que plantea el video)
+Tres microservicios independientes (**Order**, **Inventory**, **Payment**), cada uno con **su propia base de datos Postgres en su propio contenedor, volumen y red**, que se coordinan **solo mediante eventos** en un broker **NATS JetStream**. No hay orquestador central.
 
-Una tienda tiene 3 microservicios, **cada uno con su propia base de datos** (patrón *Database per Service*):
+## 1. Cómo ejecutarlo
 
-| Servicio | Base de datos | Transacción local |
-|---|---|---|
-| Order | Order DB | T1: crear pedido |
-| Inventory | Inventory DB | T2: reservar stock |
-| Payment | Payment DB | T3: cobrar |
+Requisitos: Docker Desktop encendido y Go 1.26 o superior. Todos los comandos se ejecutan **dentro de la carpeta `saga-coreografia`** (donde está `go.mod`).
 
-En Black Friday: el pedido **existía**, el stock quedó **bloqueado**, pero el pago **falló**.
-En un monolito bastaba un `ROLLBACK` (ACID, todo o nada). Aquí **no hay una transacción que abarque las 3 bases de datos**, así que no hay nada a qué hacer rollback → el inventario quedaba bloqueado para siempre.
+Levantar los 7 contenedores (3 servicios + 3 Postgres + NATS):
 
-## 2. La solución: Saga
-
-Una **saga** es una secuencia de transacciones locales. Cada paso hace *commit* en su propia BD y publica un evento que dispara el siguiente paso. Si un paso falla, se ejecutan **transacciones compensatorias** que deshacen *a nivel de negocio* lo que hicieron los pasos anteriores:
-
-| Paso | Acción | Compensación |
-|---|---|---|
-| T1 | Crear pedido (PENDING) | Cancelar pedido (CANCELLED) |
-| T2 | Reservar stock | Liberar stock (`StockReleased`) |
-| T3 | Cobrar | — (es el último paso; si falla, compensa a los demás) |
-
-> **Compensar ≠ rollback.** Un rollback borra como si nunca hubiera pasado. Una compensación es una **nueva** transacción que deja el sistema consistente (el pedido no se borra: queda registrado como `CANCELLED`).
-
-## 3. ¿Por qué Coreografía?
-
-En **coreografía** no hay un jefe central: cada servicio **escucha eventos** del broker y **reacciona** publicando los suyos. En **orquestación** habría un "Saga Orchestrator" que da órdenes. Esta tarea pide coreografía.
-
-## 4. Flujo implementado (igual a los diagramas del video)
-
-```
-            ┌──────── MESSAGE BROKER ────────┐
- Order ──①──▶ order-topic      ──②──▶ Inventory
- Order ◀─⑥── payment-topic     ◀─⑤── Payment
- Payment ◀④─ inventory-topic   ◀─③── Inventory
-            └────────────────────────────────┘
+```bash
+docker compose up -d --build --wait
 ```
 
-**Camino feliz**
-1. Order crea el pedido `PENDING` y publica `OrderCreated` → *order-topic*
-2. Inventory consume `OrderCreated` y reserva el stock
-3. Inventory publica `InventoryReserved` → *inventory-topic*
-4. Payment consume `InventoryReserved` y cobra
-5. Payment publica `PaymentProcessed` → *payment-topic*
-6. Order consume `PaymentProcessed` → pedido `CONFIRMED`
-
-**Falla de pago (caso Black Friday) → compensación**
-1. Payment publica `PaymentFailed` → *payment-topic*
-2. Inventory consume `PaymentFailed`, **libera el stock** y publica `StockReleased`
-3. Order consume `StockReleased` → **CancelOrder** → pedido `CANCELLED`
-
-**Extra: sin stock** — Inventory publica `InventoryRejected`; Order cancela y Payment nunca cobra.
-
-### ¿Quién escucha qué?
-
-| Servicio | Publica en | Escucha |
-|---|---|---|
-| Order | order-topic | payment-topic (`PaymentProcessed`), inventory-topic (`StockReleased`, `InventoryRejected`) |
-| Inventory | inventory-topic | order-topic (`OrderCreated`), payment-topic (`PaymentFailed`) |
-| Payment | payment-topic | inventory-topic (`InventoryReserved`) |
-
-## 5. Estructura del código
-
-```
-saga-coreografia/
-├── main.go                      # arma el sistema y corre 3 escenarios
-├── main_test.go                 # 5 pruebas automáticas
-└── internal/
-    ├── events/events.go         # tópicos y eventos (el contrato compartido)
-    ├── broker/broker.go         # broker pub/sub asíncrono (goroutines + canales)
-    ├── order/service.go         # Order Service   + Order DB
-    ├── inventory/service.go     # Inventory Service + Inventory DB
-    ├── payment/service.go       # Payment Service + Payment DB
-    └── logx/logx.go             # logs con color por servicio
-```
-
-- **Ningún servicio importa a otro.** Solo conocen `events` y la interfaz `broker.Broker`. Eso es el bajo acoplamiento de la coreografía.
-- **Cada servicio tiene su "base de datos" privada** (un `map` protegido con `sync.Mutex`).
-- **El broker es asíncrono**: `Publish` no espera la respuesta; cada suscriptor tiene su goroutine y su cola (canal). Por eso `PlaceOrder` devuelve el pedido en `PENDING` y el estado final llega después (*consistencia eventual*).
-- **Idempotencia**: cada evento lleva un `ID` único y cada servicio guarda los IDs ya procesados. Si el broker entrega un mensaje dos veces, no se reserva ni se cobra dos veces.
-- **`OrderID` como correlation ID**: une todos los eventos de una misma saga.
-
-## 6. Cómo ejecutarlo
-
-Requisito: Go 1.22 o superior.
+Ejecutar la demo con los 3 escenarios:
 
 ```bash
 go run .
 ```
 
-```bash
-go test -v ./...
-```
-
-Con Docker (compila, prueba y ejecuta dentro del contenedor):
+Ver cómo viajan los eventos entre servicios:
 
 ```bash
-docker compose up --build
+docker compose logs order-service inventory-service payment-service
 ```
 
-Pipeline completo en local (formato, `go vet`, pruebas, cobertura y demo; guarda todo en `evidencia/`):
+Pruebas de extremo a extremo contra los contenedores:
 
 ```bash
-powershell -ExecutionPolicy Bypass -File scripts\verificar.ps1
+go test -tags e2e -v ./e2e
 ```
 
-El mismo pipeline está configurado para GitHub Actions en `.github/workflows/ci.yml`.
+Apagar (los datos se conservan en los volúmenes):
 
-Las pruebas verifican: camino feliz, compensación por pago fallido, cancelación por falta de stock, idempotencia ante eventos duplicados, y 20 pedidos simultáneos sobre 5 unidades (se confirman exactamente 5, nunca se vende de más).
+```bash
+docker compose down
+```
 
-## 7. Limitaciones (y cómo se resolverían en producción)
+Apagar y borrar también los datos:
 
-- **Broker en memoria**: en producción sería Kafka, RabbitMQ o NATS. Solo habría que implementar la interfaz `Broker`; los servicios no cambian.
-- **Guardar en la BD y publicar el evento no es atómico**: si el servicio se cae entre ambas cosas, el evento se pierde. En producción se usa el patrón **Transactional Outbox**.
-- **Falta de aislamiento**: mientras la saga está en curso, otros pueden ver datos intermedios (stock reservado de un pedido que luego se cancela). Por eso el pedido usa el estado `PENDING`.
-- **Coreografía a gran escala**: con muchos servicios se vuelve una "telaraña invisible" difícil de seguir y depurar (lo advierte el video); ahí conviene la orquestación.
+```bash
+docker compose down -v
+```
+
+> Si `go run .` dice `go.mod file not found`, estás en la carpeta equivocada: entra primero a `saga-coreografia`.
+
+## 2. Arquitectura
+
+| Contenedor | Imagen | Puerto | Volumen | Redes |
+|---|---|---|---|---|
+| `order-service` | Go (distroless) | 8081 | — | order-net, broker-net |
+| `order-db` | postgres:16 | interno | `order-data` | order-net |
+| `inventory-service` | Go (distroless) | 8082 | — | inventory-net, broker-net |
+| `inventory-db` | postgres:16 | interno | `inventory-data` | inventory-net |
+| `payment-service` | Go (distroless) | 8083 | — | payment-net, broker-net |
+| `payment-db` | postgres:16 | interno | `payment-data` | payment-net |
+| `nats` | nats:2.10 (JetStream) | 4222, 8222 | `nats-data` | broker-net |
+
+- **Un volumen por base de datos**: los datos sobreviven a reinicios y a `docker compose down`; cada base se respalda, escala y restaura por separado.
+- **Una red por servicio**: `order-service` no puede ni siquiera resolver `inventory-db`. La única vía entre servicios es el broker.
+- **Sin cuello de botella compartido**: si hubiera una sola base de datos para todos, todas las escrituras competirían por ella y su caída tumbaría todo el sistema. Con una por servicio, una carga alta de pagos no frena a pedidos, y la caída de `payment-db` no afecta a `order-db`.
+
+## 3. Flujo de la saga
+
+**Camino feliz**
+1. `POST /orders` → Order guarda el pedido `PENDING` y publica `OrderCreated` en `saga.order`
+2. Inventory reserva el stock en su base de datos
+3. Inventory publica `InventoryReserved` en `saga.inventory`
+4. Payment cobra en su base de datos
+5. Payment publica `PaymentProcessed` en `saga.payment`
+6. Order marca el pedido `CONFIRMED`
+
+**Falla el pago (caso Black Friday) → compensación**
+1. Payment publica `PaymentFailed`
+2. Inventory devuelve el stock (transacción compensatoria) y publica `StockReleased`
+3. Order cancela el pedido (`CANCELLED`)
+
+**Sin stock**: Inventory publica `InventoryRejected` y Order cancela; Payment nunca interviene.
+
+| Servicio | Publica en | Escucha |
+|---|---|---|
+| Order | `saga.order` | `saga.payment` (`PaymentProcessed`), `saga.inventory` (`StockReleased`, `InventoryRejected`) |
+| Inventory | `saga.inventory` | `saga.order` (`OrderCreated`), `saga.payment` (`PaymentFailed`) |
+| Payment | `saga.payment` | `saga.inventory` (`InventoryReserved`) |
+
+## 4. Garantías implementadas
+
+- **Transacciones locales**: cada paso hace commit solo en su Postgres.
+- **Transactional Outbox**: el cambio de negocio y el evento se guardan en la misma transacción (tabla `outbox`); un relay los publica después en NATS. Nunca queda un cambio sin su evento.
+- **Idempotencia**: tabla `processed_events` por servicio. Si NATS entrega un evento dos veces, el segundo se ignora.
+- **Entrega al menos una vez**: consumidores durables de JetStream; si un servicio está caído, sus eventos lo esperan en el volumen `nats-data`.
+- **Concurrencia segura**: `UPDATE … WHERE stock >= cantidad` y `WHERE balance >= monto` son atómicos en Postgres; nunca se vende ni se cobra de más.
+
+## 5. Estructura
+
+```
+saga-coreografia/
+├── main.go                 # demo: cliente HTTP que ejecuta los 3 escenarios
+├── cmd/
+│   ├── order/main.go       # microservicio Order (API HTTP)
+│   ├── inventory/main.go   # microservicio Inventory
+│   └── payment/main.go     # microservicio Payment
+├── internal/
+│   ├── events/             # contrato: tópicos y eventos
+│   ├── broker/             # NATS JetStream (interfaz Broker)
+│   ├── store/              # Postgres, outbox e idempotencia
+│   ├── platform/           # arranque común de un servicio
+│   ├── order/ inventory/ payment/   # lógica de cada servicio
+│   ├── client/             # cliente HTTP (demo y pruebas)
+│   └── logx/               # logs por servicio
+├── e2e/saga_e2e_test.go    # 5 pruebas de extremo a extremo
+├── Dockerfile              # una receta, 3 imágenes (ARG SERVICE)
+├── docker-compose.yml      # 7 contenedores, 4 volúmenes, 4 redes
+├── .env.example            # credenciales de las bases de datos
+├── .github/workflows/ci.yml
+├── scripts/verificar.ps1   # pipeline local + evidencia
+└── evidencia/              # salidas reales de las pruebas y Docker
+```
+
+## 6. APIs
+
+| Servicio | Método y ruta | Uso |
+|---|---|---|
+| Order `:8081` | `POST /orders` | Crear pedido `{"customer_id","product_id","quantity"}` → 202 PENDING |
+| | `GET /orders/{id}`, `GET /orders` | Consultar pedidos |
+| Inventory `:8082` | `GET /stock` | Stock por producto |
+| Payment `:8083` | `GET /accounts`, `GET /payments/{order}` | Saldos y pagos |
+| Todos | `GET /health` | Salud (lo usa Docker) |
+| Todos | `PUT /admin/...` | Cargar datos de prueba |
+
+## 7. Pruebas
+
+`go test -tags e2e -v ./e2e` corre contra los contenedores reales:
+
+| Prueba | Verifica |
+|---|---|
+| `TestCaminoFeliz` | CONFIRMED, stock 10 → 9, saldo 100 → 41 |
+| `TestPagoFallidoCompensaInventario` | CANCELLED y el stock vuelve a 3 |
+| `TestSinStockCancelaSinCobrar` | CANCELLED sin registro de pago |
+| `TestEventoDuplicadoEsIdempotente` | Un evento entregado 2 veces se aplica 1 vez |
+| `TestPedidosConcurrentes` | 20 pedidos simultáneos con 5 unidades → 5 CONFIRMED, 15 CANCELLED |
+
+## 8. Limitaciones
+
+- La coreografía con muchos servicios se vuelve difícil de seguir; con más pasos convendría orquestación.
+- Mientras la saga corre, otros pueden ver datos intermedios (stock reservado de un pedido que luego se cancela). Por eso existe el estado `PENDING`.
+- Las credenciales de `.env.example` son de desarrollo.

@@ -1,0 +1,30 @@
+Conectando con los microservicios…
+
+═══ ESCENARIO 1 · Camino feliz: Jeremy Delgado compra 1 Runner Pro ═══
+  POST /orders → ORD-001 PENDING (la API responde al instante: la saga sigue sola)
+
+  Estado final en cada base de datos (cada una en su propio contenedor y volumen):
+  • order-db     → ORD-001 CONFIRMED
+  • inventory-db → runner-pro: 50 → 49
+  • payment-db   → pago PAID | saldo de Jeremy Delgado: $500.00 → $441.00
+
+═══ ESCENARIO 2 · Falla el pago (caso Black Friday): Angel Alvarez compra 1 Studio Buds ═══
+  POST /orders → ORD-002 PENDING (la API responde al instante: la saga sigue sola)
+  Motivo: fondos insuficientes (saldo $20.00, total $99.00)
+
+  Estado final en cada base de datos (cada una en su propio contenedor y volumen):
+  • order-db     → ORD-002 CANCELLED
+  • inventory-db → studio-buds: 3 → 3
+  • payment-db   → pago FAILED | saldo de Angel Alvarez: $20.00 → $20.00
+
+═══ ESCENARIO 3 · Sin stock: Erick Cevallos compra 5 Studio Buds ═══
+  POST /orders → ORD-003 PENDING (la API responde al instante: la saga sigue sola)
+  Motivo: sin stock de studio-buds (hay 3, se piden 5)
+
+  Estado final en cada base de datos (cada una en su propio contenedor y volumen):
+  • order-db     → ORD-003 CANCELLED
+  • inventory-db → studio-buds: 3 → 3
+  • payment-db   → pago — (nunca llegó a cobrarse) | saldo de Erick Cevallos: $1000.00 → $1000.00
+
+Recorrido de los eventos entre servicios:
+  docker compose logs order-service inventory-service payment-service

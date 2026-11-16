@@ -1,0 +1,13 @@
+=== RUN   TestCaminoFeliz
+--- PASS: TestCaminoFeliz (0.34s)
+=== RUN   TestPagoFallidoCompensaInventario
+--- PASS: TestPagoFallidoCompensaInventario (0.32s)
+=== RUN   TestSinStockCancelaSinCobrar
+--- PASS: TestSinStockCancelaSinCobrar (0.33s)
+=== RUN   TestEventoDuplicadoEsIdempotente
+--- PASS: TestEventoDuplicadoEsIdempotente (2.22s)
+=== RUN   TestPedidosConcurrentes
+    20 pedidos simultáneos → 5 CONFIRMED, 15 CANCELLED, stock final 0
+--- PASS: TestPedidosConcurrentes (0.54s)
+PASS
+ok  	saga-coreografia/e2e	3.831s
