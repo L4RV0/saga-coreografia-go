@@ -1,0 +1,780 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>broker: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">saga-coreografia/internal/broker/broker.go (100.0%)</option>
+				
+				<option value="file1">saga-coreografia/internal/events/events.go (100.0%)</option>
+				
+				<option value="file2">saga-coreografia/internal/inventory/service.go (92.6%)</option>
+				
+				<option value="file3">saga-coreografia/internal/logx/logx.go (43.8%)</option>
+				
+				<option value="file4">saga-coreografia/internal/order/service.go (93.4%)</option>
+				
+				<option value="file5">saga-coreografia/internal/payment/service.go (94.4%)</option>
+				
+				<option value="file6">saga-coreografia/main.go (5.1%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">// Package broker implementa el "Message Broker System" del video: un sistema
+// de publicación/suscripción por tópicos. Los servicios NUNCA se llaman entre
+// sí directamente; solo publican eventos y reaccionan a los eventos de otros.
+//
+// Esta versión vive en memoria (goroutines + canales) para que el proyecto
+// corra sin instalar nada. Como los servicios dependen de la interfaz Broker,
+// se puede cambiar por Kafka, RabbitMQ o NATS sin tocar su lógica.
+package broker
+
+import (
+        "sync"
+
+        "saga-coreografia/internal/events"
+        "saga-coreografia/internal/logx"
+)
+
+// Handler procesa un evento recibido.
+type Handler func(events.Event)
+
+// Broker es lo único que los servicios conocen del sistema de mensajería.
+type Broker interface {
+        Publish(topic string, e events.Event)
+        Subscribe(topic, subscriber string, h Handler)
+}
+
+type subscription struct {
+        name string
+        ch   chan events.Event
+}
+
+// InMemory es un broker asíncrono: Publish no espera a que los consumidores
+// procesen el evento (igual que un broker real).
+type InMemory struct {
+        mu      sync.RWMutex
+        subs    map[string][]*subscription
+        pending sync.WaitGroup // eventos publicados que aún no terminan de procesarse
+}
+
+// NewInMemory crea un broker vacío.
+func NewInMemory() *InMemory {
+        <span class="cov8" title="1">return &amp;InMemory{subs: make(map[string][]*subscription)}
+</span>}
+
+// Subscribe registra un consumidor en un tópico. Cada suscripción tiene su
+// propia cola (canal) y su propia goroutine, como un consumer group.
+func (b *InMemory) Subscribe(topic, subscriber string, h Handler) {
+        <span class="cov8" title="1">s := &amp;subscription{name: subscriber, ch: make(chan events.Event, 256)}
+</span>
+        <span class="cov8" title="1">b.mu.Lock()
+        b.subs[topic] = append(b.subs[topic], s)
+        b.mu.Unlock()
+</span>
+        <span class="cov8" title="1">go func() </span>{
+                <span class="cov8" title="1">for e := range s.ch </span>{
+                        <span class="cov8" title="1">h(e)
+                        b.pending.Done()
+</span>                }
+        }()
+}
+
+// Publish entrega una copia del evento a cada suscriptor del tópico.
+func (b *InMemory) Publish(topic string, e events.Event) {
+        <span class="cov8" title="1">b.mu.RLock()
+        defer b.mu.RUnlock()
+</span>
+        <span class="cov8" title="1">logx.Log("broker", logx.Gray, "📨 %-17s → %s", e.Type, topic)
+        for _, s := range b.subs[topic] </span>{
+                <span class="cov8" title="1">b.pending.Add(1)
+                s.ch &lt;- e
+</span>        }
+}
+
+// WaitIdle bloquea hasta que todos los eventos publicados (y los que estos
+// provocaron en cadena) fueron procesados. Sirve para la demo y los tests.
+func (b *InMemory) WaitIdle() { <span class="cov8" title="1">b.pending.Wait() }</span>
+
+// Close cierra todas las colas.
+func (b *InMemory) Close() {
+        <span class="cov8" title="1">b.mu.Lock()
+        defer b.mu.Unlock()
+        for _, list := range b.subs </span>{
+                <span class="cov8" title="1">for _, s := range list </span>{
+                        <span class="cov8" title="1">close(s.ch)
+</span>                }
+        }
+        <span class="cov8" title="1">b.subs = map[string][]*subscription{}</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">// Package events define el "contrato" entre microservicios: los tópicos del
+// broker y los eventos que viajan por ellos. Es lo ÚNICO que los servicios
+// comparten; ninguno conoce el código ni la base de datos de otro.
+package events
+
+import (
+        "crypto/rand"
+        "encoding/hex"
+        "time"
+)
+
+// Tópicos del broker (igual que en el video: order / inventory / payment topic).
+// Cada servicio publica SOLO en su propio tópico.
+const (
+        TopicOrder     = "order-topic"
+        TopicInventory = "inventory-topic"
+        TopicPayment   = "payment-topic"
+)
+
+// Type es el nombre del evento (algo que YA ocurrió, por eso va en pasado).
+type Type string
+
+const (
+        // Publicado por Order en order-topic.
+        OrderCreated Type = "OrderCreated"
+
+        // Publicados por Inventory en inventory-topic.
+        InventoryReserved Type = "InventoryReserved" // transacción local T2 OK
+        InventoryRejected Type = "InventoryRejected" // sin stock: T2 falló
+        StockReleased     Type = "StockReleased"     // transacción COMPENSATORIA de T2
+
+        // Publicados por Payment en payment-topic.
+        PaymentProcessed Type = "PaymentProcessed" // transacción local T3 OK
+        PaymentFailed    Type = "PaymentFailed"    // T3 falló -&gt; dispara compensaciones
+)
+
+// Event es el mensaje que viaja por el broker.
+type Event struct {
+        ID         string // identificador único: permite descartar duplicados (idempotencia)
+        Type       Type
+        OrderID    string // "correlation id": une todos los eventos de una misma saga
+        CustomerID string
+        ProductID  string
+        Quantity   int
+        Amount     float64
+        Reason     string // motivo de un fallo, si lo hay
+        OccurredAt time.Time
+}
+
+// New crea un evento nuevo de tipo t copiando los datos de negocio de base.
+func New(t Type, base Event) Event {
+        <span class="cov8" title="1">base.ID = newID()
+        base.Type = t
+        base.OccurredAt = time.Now()
+        return base
+</span>}
+
+func newID() string {
+        <span class="cov8" title="1">b := make([]byte, 6)
+        _, _ = rand.Read(b)
+        return hex.EncodeToString(b)
+</span>}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">// Package inventory es el Inventory Service. Reserva stock cuando se crea un
+// pedido y lo LIBERA (compensación) si el pago falla.
+package inventory
+
+import (
+        "fmt"
+        "sync"
+
+        "saga-coreografia/internal/broker"
+        "saga-coreografia/internal/events"
+        "saga-coreografia/internal/logx"
+)
+
+type reservation struct {
+        ProductID string
+        Quantity  int
+        Released  bool
+}
+
+type Service struct {
+        bus broker.Broker
+
+        mu           sync.Mutex
+        stock        map[string]int          // "Inventory DB": unidades disponibles
+        reservations map[string]*reservation // orderID -&gt; reserva
+        processed    map[string]bool
+}
+
+func New(bus broker.Broker, initialStock map[string]int) *Service {
+        <span class="cov8" title="1">s := &amp;Service{
+                bus:          bus,
+                stock:        make(map[string]int),
+                reservations: make(map[string]*reservation),
+                processed:    make(map[string]bool),
+</span>        }
+        <span class="cov8" title="1">for k, v := range initialStock </span>{
+                <span class="cov8" title="1">s.stock[k] = v
+</span>        }
+        <span class="cov8" title="1">bus.Subscribe(events.TopicOrder, "inventory-service", s.onOrderEvent)
+        bus.Subscribe(events.TopicPayment, "inventory-service", s.onPaymentEvent)
+        return s</span>
+}
+
+// onOrderEvent: pasos ② y ③. Transacción local T2 = reservar stock.
+func (s *Service) onOrderEvent(e events.Event) {
+        <span class="cov8" title="1">if e.Type != events.OrderCreated </span>{
+                <span class="cov0" title="0">return
+</span>        }
+
+        <span class="cov8" title="1">s.mu.Lock()
+        if s.processed[e.ID] </span>{
+                <span class="cov8" title="1">s.mu.Unlock()
+                return
+</span>        }
+        <span class="cov8" title="1">s.processed[e.ID] = true
+</span>
+        <span class="cov8" title="1">available := s.stock[e.ProductID]
+        if available &lt; e.Quantity </span>{
+                <span class="cov8" title="1">s.mu.Unlock()
+                reason := fmt.Sprintf("sin stock de %s (hay %d, se piden %d)", e.ProductID, available, e.Quantity)
+                logx.Log("inventory", logx.Red, "② %s ✗ %s", e.OrderID, reason)
+                out := events.New(events.InventoryRejected, e)
+                out.Reason = reason
+                s.bus.Publish(events.TopicInventory, out)
+                return
+</span>        }
+
+        <span class="cov8" title="1">s.stock[e.ProductID] = available - e.Quantity // commit local en la Inventory DB
+        s.reservations[e.OrderID] = &amp;reservation{ProductID: e.ProductID, Quantity: e.Quantity}
+        left := s.stock[e.ProductID]
+        s.mu.Unlock()
+</span>
+        <span class="cov8" title="1">logx.Log("inventory", logx.Green, "②③ %s: reservadas %d u. de %s (quedan %d) ✓", e.OrderID, e.Quantity, e.ProductID, left)
+        s.bus.Publish(events.TopicInventory, events.New(events.InventoryReserved, e))</span>
+}
+
+// onPaymentEvent: si el pago falló ejecuta la TRANSACCIÓN COMPENSATORIA de
+// T2 (liberar el stock) y avisa con StockReleased.
+func (s *Service) onPaymentEvent(e events.Event) {
+        <span class="cov8" title="1">if e.Type != events.PaymentFailed </span>{
+                <span class="cov8" title="1">return
+</span>        }
+
+        <span class="cov8" title="1">s.mu.Lock()
+        if s.processed[e.ID] </span>{
+                <span class="cov0" title="0">s.mu.Unlock()
+                return
+</span>        }
+        <span class="cov8" title="1">s.processed[e.ID] = true
+</span>
+        <span class="cov8" title="1">r, ok := s.reservations[e.OrderID]
+        if !ok || r.Released </span>{
+                <span class="cov0" title="0">s.mu.Unlock()
+                return
+</span>        }
+        <span class="cov8" title="1">s.stock[r.ProductID] += r.Quantity // devolvemos lo reservado
+        r.Released = true
+        left := s.stock[r.ProductID]
+        s.mu.Unlock()
+</span>
+        <span class="cov8" title="1">logx.Log("inventory", logx.Yellow, "↩ COMPENSANDO %s: liberadas %d u. de %s (quedan %d)", e.OrderID, r.Quantity, r.ProductID, left)
+        s.bus.Publish(events.TopicInventory, events.New(events.StockReleased, e))</span>
+}
+
+// Stock devuelve las unidades disponibles de un producto.
+func (s *Service) Stock(productID string) int {
+        <span class="cov8" title="1">s.mu.Lock()
+        defer s.mu.Unlock()
+        return s.stock[productID]
+</span>}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">// Package logx imprime mensajes con el nombre y color de cada servicio para
+// poder seguir la "coreografía" en la consola.
+package logx
+
+import (
+        "fmt"
+        "os"
+        "sync"
+)
+
+const (
+        Reset  = "\033[0m"
+        Blue   = "\033[34m"
+        Green  = "\033[32m"
+        Purple = "\033[35m"
+        Yellow = "\033[33m"
+        Gray   = "\033[90m"
+        Red    = "\033[31m"
+        Bold   = "\033[1m"
+)
+
+var (
+        mu      sync.Mutex
+        enabled = true
+        // NO_COLOR=1 desactiva los colores (útil para guardar logs en archivos).
+        noColor = os.Getenv("NO_COLOR") != ""
+)
+
+func paint(color, s string) string {
+        <span class="cov0" title="0">if noColor </span>{
+                <span class="cov0" title="0">return s
+</span>        }
+        <span class="cov0" title="0">return color + s + Reset</span>
+}
+
+// SetEnabled permite silenciar los logs (lo usan los tests).
+func SetEnabled(v bool) {
+        <span class="cov8" title="1">mu.Lock()
+        enabled = v
+        mu.Unlock()
+</span>}
+
+// Log escribe "[servicio] mensaje" con color.
+func Log(service, color, format string, args ...any) {
+        <span class="cov8" title="1">mu.Lock()
+        defer mu.Unlock()
+        if !enabled </span>{
+                <span class="cov8" title="1">return
+</span>        }
+        <span class="cov0" title="0">fmt.Fprintf(os.Stdout, "%s %s\n", paint(color, fmt.Sprintf("%-11s", "["+service+"]")), fmt.Sprintf(format, args...))</span>
+}
+
+// Title imprime un encabezado.
+func Title(format string, args ...any) {
+        <span class="cov0" title="0">mu.Lock()
+        defer mu.Unlock()
+        if !enabled </span>{
+                <span class="cov0" title="0">return
+</span>        }
+        <span class="cov0" title="0">fmt.Printf("\n%s\n", paint(Bold, fmt.Sprintf(format, args...)))</span>
+}
+</pre>
+		
+		<pre class="file" id="file4" style="display: none">// Package order es el Order Service. Inicia la saga y es quien decide el
+// estado final del pedido (CONFIRMED o CANCELLED) según los eventos que
+// escucha de Inventory y Payment.
+package order
+
+import (
+        "errors"
+        "fmt"
+        "sync"
+
+        "saga-coreografia/internal/broker"
+        "saga-coreografia/internal/events"
+        "saga-coreografia/internal/logx"
+)
+
+type Status string
+
+const (
+        Pending   Status = "PENDING"   // saga en curso
+        Confirmed Status = "CONFIRMED" // todos los pasos OK
+        Cancelled Status = "CANCELLED" // un paso falló y se compensó
+)
+
+type Order struct {
+        ID         string
+        CustomerID string
+        ProductID  string
+        Quantity   int
+        Amount     float64
+        Status     Status
+        Reason     string
+}
+
+// Service tiene su PROPIA base de datos (Database-per-Service). Nadie más
+// puede leerla ni escribirla.
+type Service struct {
+        bus broker.Broker
+
+        mu        sync.Mutex
+        db        map[string]*Order  // "Order DB"
+        prices    map[string]float64 // catálogo de precios
+        processed map[string]bool    // IDs de eventos ya procesados (idempotencia)
+        seq       int
+}
+
+func New(bus broker.Broker, prices map[string]float64) *Service {
+        <span class="cov8" title="1">s := &amp;Service{
+                bus:       bus,
+                db:        make(map[string]*Order),
+                prices:    prices,
+                processed: make(map[string]bool),
+</span>        }
+        // Coreografía: Order reacciona a lo que publican los demás.
+        <span class="cov8" title="1">bus.Subscribe(events.TopicPayment, "order-service", s.onPaymentEvent)
+        bus.Subscribe(events.TopicInventory, "order-service", s.onInventoryEvent)
+        return s
+</span>}
+
+// PlaceOrder es el PASO 1 de la saga (T1): transacción local que crea el
+// pedido en estado PENDING y publica OrderCreated. No espera a nadie.
+func (s *Service) PlaceOrder(customerID, productID string, qty int) (Order, error) {
+        <span class="cov8" title="1">price, ok := s.prices[productID]
+        if !ok </span>{
+                <span class="cov0" title="0">return Order{}, fmt.Errorf("producto %q no existe", productID)
+</span>        }
+        <span class="cov8" title="1">if qty &lt;= 0 </span>{
+                <span class="cov0" title="0">return Order{}, errors.New("la cantidad debe ser mayor a 0")
+</span>        }
+
+        <span class="cov8" title="1">s.mu.Lock()
+        s.seq++
+        o := &amp;Order{
+                ID:         fmt.Sprintf("ORD-%03d", s.seq),
+                CustomerID: customerID,
+                ProductID:  productID,
+                Quantity:   qty,
+                Amount:     price * float64(qty),
+                Status:     Pending,
+</span>        }
+        <span class="cov8" title="1">s.db[o.ID] = o // commit local en la Order DB
+        snapshot := *o
+        s.mu.Unlock()
+</span>
+        <span class="cov8" title="1">logx.Log("order", logx.Blue, "① Pedido %s creado (%s x%d, $%.2f) → PENDING", o.ID, productID, qty, o.Amount)
+</span>
+        <span class="cov8" title="1">s.bus.Publish(events.TopicOrder, events.New(events.OrderCreated, events.Event{
+                OrderID:    o.ID,
+                CustomerID: customerID,
+                ProductID:  productID,
+                Quantity:   qty,
+                Amount:     o.Amount,
+        }))
+        return snapshot, nil</span>
+}
+
+// onPaymentEvent: paso ⑥ del camino feliz.
+func (s *Service) onPaymentEvent(e events.Event) {
+        <span class="cov8" title="1">if e.Type != events.PaymentProcessed || s.alreadyProcessed(e.ID) </span>{
+                // PaymentFailed lo ignoramos aquí: el pedido se cancela cuando
+                // Inventory confirme que ya liberó el stock (StockReleased).
+                <span class="cov8" title="1">return
+</span>        }
+        <span class="cov8" title="1">s.setStatus(e.OrderID, Confirmed, "")
+        logx.Log("order", logx.Blue, "⑥ Pago confirmado → pedido %s CONFIRMED ", e.OrderID)</span>
+}
+
+// onInventoryEvent: aquí terminan los caminos de fallo.
+func (s *Service) onInventoryEvent(e events.Event) {
+        <span class="cov8" title="1">switch e.Type </span>{
+        case events.StockReleased, events.InventoryRejected:<span class="cov8" title="1"></span>
+        default:
+                <span class="cov8" title="1">return</span>
+        }
+        <span class="cov8" title="1">if s.alreadyProcessed(e.ID) </span>{
+                <span class="cov0" title="0">return
+</span>        }
+        // Transacción COMPENSATORIA de T1: no se borra el pedido, se cancela.
+        <span class="cov8" title="1">s.setStatus(e.OrderID, Cancelled, e.Reason)
+        logx.Log("order", logx.Red, "↩ CancelOrder: pedido %s CANCELLED  (%s)", e.OrderID, e.Reason)</span>
+}
+
+func (s *Service) setStatus(id string, st Status, reason string) {
+        <span class="cov8" title="1">s.mu.Lock()
+        defer s.mu.Unlock()
+        if o, ok := s.db[id]; ok &amp;&amp; o.Status == Pending </span>{
+                <span class="cov8" title="1">o.Status = st
+                o.Reason = reason
+</span>        }
+}
+
+func (s *Service) alreadyProcessed(eventID string) bool {
+        <span class="cov8" title="1">s.mu.Lock()
+        defer s.mu.Unlock()
+        if s.processed[eventID] </span>{
+                <span class="cov0" title="0">return true
+</span>        }
+        <span class="cov8" title="1">s.processed[eventID] = true
+        return false</span>
+}
+
+// Get devuelve una copia del pedido.
+func (s *Service) Get(id string) (Order, bool) {
+        <span class="cov8" title="1">s.mu.Lock()
+        defer s.mu.Unlock()
+        o, ok := s.db[id]
+        if !ok </span>{
+                <span class="cov0" title="0">return Order{}, false
+</span>        }
+        <span class="cov8" title="1">return *o, true</span>
+}
+</pre>
+		
+		<pre class="file" id="file5" style="display: none">// Package payment es el Payment Service. Cobra el pedido una vez que el stock
+// está reservado. Es el último paso: si falla, dispara las compensaciones.
+package payment
+
+import (
+        "fmt"
+        "sync"
+
+        "saga-coreografia/internal/broker"
+        "saga-coreografia/internal/events"
+        "saga-coreografia/internal/logx"
+)
+
+type Status string
+
+const (
+        Paid   Status = "PAID"
+        Failed Status = "FAILED"
+)
+
+type Payment struct {
+        OrderID    string
+        CustomerID string
+        Amount     float64
+        Status     Status
+}
+
+type Service struct {
+        bus broker.Broker
+
+        mu        sync.Mutex
+        balances  map[string]float64  // "Payment DB": saldo de cada cliente
+        payments  map[string]*Payment // orderID -&gt; pago
+        processed map[string]bool
+}
+
+func New(bus broker.Broker, initialBalances map[string]float64) *Service {
+        <span class="cov8" title="1">s := &amp;Service{
+                bus:       bus,
+                balances:  make(map[string]float64),
+                payments:  make(map[string]*Payment),
+                processed: make(map[string]bool),
+</span>        }
+        <span class="cov8" title="1">for k, v := range initialBalances </span>{
+                <span class="cov8" title="1">s.balances[k] = v
+</span>        }
+        <span class="cov8" title="1">bus.Subscribe(events.TopicInventory, "payment-service", s.onInventoryEvent)
+        return s</span>
+}
+
+// onInventoryEvent: pasos ④ y ⑤. Transacción local T3 = cobrar.
+func (s *Service) onInventoryEvent(e events.Event) {
+        <span class="cov8" title="1">if e.Type != events.InventoryReserved </span>{
+                <span class="cov8" title="1">return
+</span>        }
+
+        <span class="cov8" title="1">s.mu.Lock()
+        if s.processed[e.ID] </span>{
+                <span class="cov0" title="0">s.mu.Unlock()
+                return
+</span>        }
+        <span class="cov8" title="1">s.processed[e.ID] = true
+</span>
+        <span class="cov8" title="1">balance := s.balances[e.CustomerID]
+        if balance &lt; e.Amount </span>{
+                // Se registra el intento fallido en la Payment DB.
+                <span class="cov8" title="1">s.payments[e.OrderID] = &amp;Payment{OrderID: e.OrderID, CustomerID: e.CustomerID, Amount: e.Amount, Status: Failed}
+                s.mu.Unlock()
+</span>
+                <span class="cov8" title="1">reason := fmt.Sprintf("fondos insuficientes (saldo $%.2f, total $%.2f)", balance, e.Amount)
+                logx.Log("payment", logx.Red, "④ %s ✗ pago rechazado: %s", e.OrderID, reason)
+                out := events.New(events.PaymentFailed, e)
+                out.Reason = reason
+                s.bus.Publish(events.TopicPayment, out)
+                return
+</span>        }
+
+        <span class="cov8" title="1">s.balances[e.CustomerID] = balance - e.Amount // commit local en la Payment DB
+        s.payments[e.OrderID] = &amp;Payment{OrderID: e.OrderID, CustomerID: e.CustomerID, Amount: e.Amount, Status: Paid}
+        s.mu.Unlock()
+</span>
+        <span class="cov8" title="1">logx.Log("payment", logx.Purple, "④⑤ %s: cobrados $%.2f a %s ✓", e.OrderID, e.Amount, e.CustomerID)
+        s.bus.Publish(events.TopicPayment, events.New(events.PaymentProcessed, e))</span>
+}
+
+// Balance devuelve el saldo de un cliente.
+func (s *Service) Balance(customerID string) float64 {
+        <span class="cov8" title="1">s.mu.Lock()
+        defer s.mu.Unlock()
+        return s.balances[customerID]
+</span>}
+
+// Get devuelve el pago de un pedido.
+func (s *Service) Get(orderID string) (Payment, bool) {
+        <span class="cov8" title="1">s.mu.Lock()
+        defer s.mu.Unlock()
+        p, ok := s.payments[orderID]
+        if !ok </span>{
+                <span class="cov8" title="1">return Payment{}, false
+</span>        }
+        <span class="cov0" title="0">return *p, true</span>
+}
+</pre>
+		
+		<pre class="file" id="file6" style="display: none">// Saga basada en Coreografía — caso "Black Friday" del video
+// "How Saga Pattern Solves Distributed Transactions in Microservices".
+//
+// Tres microservicios (Order, Inventory, Payment), cada uno con su propia base
+// de datos, que se coordinan SOLO mediante eventos en un broker. No existe un
+// orquestador central.
+package main
+
+import (
+        "fmt"
+
+        "saga-coreografia/internal/broker"
+        "saga-coreografia/internal/inventory"
+        "saga-coreografia/internal/logx"
+        "saga-coreografia/internal/order"
+        "saga-coreografia/internal/payment"
+)
+
+// Productos de la tienda del video.
+var prices = map[string]float64{
+        "mystery-box": 29,
+        "runner-pro":  59,
+        "studio-buds": 99,
+}
+
+type system struct {
+        bus       *broker.InMemory
+        orders    *order.Service
+        inventory *inventory.Service
+        payments  *payment.Service
+}
+
+func newSystem(stock map[string]int, balances map[string]float64) *system {
+        <span class="cov8" title="1">bus := broker.NewInMemory()
+        return &amp;system{
+                bus:       bus,
+                orders:    order.New(bus, prices),
+                inventory: inventory.New(bus, stock),
+                payments:  payment.New(bus, balances),
+</span>        }
+}
+
+func main() {
+        <span class="cov0" title="0">sys := newSystem(
+                map[string]int{"mystery-box": 100, "runner-pro": 50, "studio-buds": 3},
+                map[string]float64{"Jeremy Delgado": 500, "Angel Alvarez": 20, "Erick Cevallos": 1000},
+        )
+        defer sys.bus.Close()
+</span>
+        <span class="cov0" title="0">run(sys, "ESCENARIO 1 · Camino feliz: Jeremy Delgado compra 1 Runner Pro", "Jeremy Delgado", "runner-pro", 1)
+        run(sys, "ESCENARIO 2 · Falla el pago (caso Black Friday): Angel Alvarez compra 1 Studio Buds", "Angel Alvarez", "studio-buds", 1)
+        run(sys, "ESCENARIO 3 · Sin stock: Erick Cevallos compra 5 Studio Buds", "Erick Cevallos", "studio-buds", 5)
+</span>}
+
+func run(sys *system, title, customer, product string, qty int) {
+        <span class="cov0" title="0">logx.Title("═══ %s ═══", title)
+        stockBefore := sys.inventory.Stock(product)
+        balanceBefore := sys.payments.Balance(customer)
+</span>
+        <span class="cov0" title="0">o, err := sys.orders.PlaceOrder(customer, product, qty)
+        if err != nil </span>{
+                <span class="cov0" title="0">fmt.Println("error:", err)
+                return
+</span>        }
+
+        // La saga es ASÍNCRONA: PlaceOrder ya devolvió el pedido en PENDING.
+        // Esperamos a que el broker termine de repartir todos los eventos.
+        <span class="cov0" title="0">sys.bus.WaitIdle()
+</span>
+        <span class="cov0" title="0">final, _ := sys.orders.Get(o.ID)
+        pay, hasPay := sys.payments.Get(o.ID)
+        payStatus := "— (nunca llegó a cobrarse)"
+        if hasPay </span>{
+                <span class="cov0" title="0">payStatus = string(pay.Status)
+</span>        }
+
+        <span class="cov0" title="0">fmt.Printf("\n  Estado final en cada base de datos:\n")
+        fmt.Printf("  • Order DB     → %s %s\n", final.ID, final.Status)
+        fmt.Printf("  • Inventory DB → %s: %d → %d\n", product, stockBefore, sys.inventory.Stock(product))
+        fmt.Printf("  • Payment DB   → pago %s | saldo de %s: $%.2f → $%.2f\n", payStatus, customer, balanceBefore, sys.payments.Balance(customer))</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

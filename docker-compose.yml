@@ -1,0 +1,6 @@
+services:
+  saga:
+    build: .
+    image: saga-coreografia:latest
+    container_name: saga-coreografia
+    tty: true # conserva los colores de los logs por servicio

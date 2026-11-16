@@ -1,0 +1,40 @@
+
+#10 [build 3/7] COPY go.mod ./
+#10 DONE 0.1s
+
+#11 [build 4/7] RUN go mod download
+#11 0.214 go: no module dependencies to download
+#11 DONE 0.2s
+
+#12 [build 5/7] COPY . .
+#12 DONE 0.1s
+
+#13 [build 6/7] RUN go vet ./... && go test ./...
+#13 5.328 ?   	saga-coreografia/internal/broker	[no test files]
+#13 5.328 ?   	saga-coreografia/internal/events	[no test files]
+#13 5.328 ?   	saga-coreografia/internal/inventory	[no test files]
+#13 5.328 ?   	saga-coreografia/internal/logx	[no test files]
+#13 5.328 ?   	saga-coreografia/internal/order	[no test files]
+#13 5.328 ?   	saga-coreografia/internal/payment	[no test files]
+#13 5.333 ok  	saga-coreografia	0.004s
+#13 DONE 5.5s
+
+#14 [build 7/7] RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/saga .
+#14 DONE 3.6s
+
+#15 [stage-1 2/2] COPY --from=build /out/saga /saga
+#15 DONE 0.0s
+
+#16 exporting to image
+#16 exporting layers 0.1s done
+#16 exporting manifest sha256:0e920ec8615e57b5b361590a072ebf59e56240dea8d28ffe3823eb78016bd4ea 0.0s done
+#16 exporting config sha256:41a71057b78a9af4df1437606859588864156519a0058c450957dd2b598921ec 0.0s done
+#16 exporting attestation manifest sha256:6cd71a70d7cc58c7ce936f640bc36c62a2a61d9a79f87629d7d60392551af792 0.0s done
+#16 exporting manifest list sha256:4b38017bc804ed6a10810dafba267b9c3765def45a5cf6605cbe76f1e353b94f 0.0s done
+#16 naming to docker.io/library/saga-coreografia:latest done
+#16 unpacking to docker.io/library/saga-coreografia:latest 0.0s done
+#16 DONE 0.3s
+
+#17 resolving provenance for metadata file
+#17 DONE 0.1s
+ Image saga-coreografia:latest Built 

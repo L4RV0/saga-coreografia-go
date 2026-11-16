@@ -1,0 +1,23 @@
+ Network saga-coreografia_default Creating 
+ Network saga-coreografia_default Created 
+ Container saga-coreografia-saga-run-0a75d8531410 Creating 
+ Container saga-coreografia-saga-run-0a75d8531410 Created 
+
+═══ ESCENARIO 1 · Camino feliz: Jeremy Delgado compra 1 Runner Pro ═══
+[order]     ① Pedido ORD-001 creado (runner-pro x1, $59.00) → PENDING
+[broker]    📨 OrderCreated      → order-topic
+[inventory] ②③ ORD-001: reservadas 1 u. de runner-pro (quedan 49) ✓
+[broker]    📨 InventoryReserved → inventory-topic
+[payment]   ④⑤ ORD-001: cobrados $59.00 a Jeremy Delgado ✓
+[broker]    📨 PaymentProcessed  → payment-topic
+[order]     ⑥ Pago confirmado → pedido ORD-001 CONFIRMED 
+
+  Estado final en cada base de datos:
+  • Order DB     → ORD-001 CONFIRMED
+  • Inventory DB → runner-pro: 50 → 49
+  • Payment DB   → pago PAID | saldo de Jeremy Delgado: $500.00 → $441.00
+
+═══ ESCENARIO 2 · Falla el pago (caso Black Friday): Angel Alvarez compra 1 Studio Buds ═══
+[order]     ① Pedido ORD-002 creado (studio-buds x1, $99.00) → PENDING
+[broker]    📨 OrderCreated      → order-topic
+[inventory] ②③ ORD-002: reservadas 1 u. de studio-buds (quedan 2
