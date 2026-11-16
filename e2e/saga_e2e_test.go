@@ -157,7 +157,7 @@ func TestEventoDuplicadoEsIdempotente(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	time.Sleep(2 * time.Second) // margen por si llegara un segundo cobro
+	time.Sleep(2 * time.Second)     // margen por si llegara un segundo cobro
 	expectStock(t, product, 8)      // reservado una sola vez
 	expectBalance(t, customer, 942) // cobrado una sola vez
 }
