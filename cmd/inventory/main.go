@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -22,6 +23,18 @@ func main() {
 
 		mux.HandleFunc("GET /stock", func(w http.ResponseWriter, r *http.Request) {
 			list, err := svc.List(r.Context())
+			if err != nil {
+				platform.Error(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			platform.WriteJSON(w, http.StatusOK, list)
+		})
+
+		// Kardex: GET /movements?product=runner-pro&order=ORD-002&limit=50
+		mux.HandleFunc("GET /movements", func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query()
+			limit, _ := strconv.Atoi(q.Get("limit"))
+			list, err := svc.Movements(r.Context(), q.Get("product"), q.Get("order"), limit)
 			if err != nil {
 				platform.Error(w, http.StatusInternalServerError, err.Error())
 				return

@@ -93,6 +93,13 @@ func (c *Client) Stock(ctx context.Context, product string) (int, error) {
 	return 0, ErrNotFound
 }
 
+// Movements devuelve el kardex de un producto (más reciente primero).
+func (c *Client) Movements(ctx context.Context, product string) ([]inventory.Movement, error) {
+	var list []inventory.Movement
+	err := c.do(ctx, http.MethodGet, c.InventoryURL+"/movements?limit=1000&product="+url.QueryEscape(product), nil, &list)
+	return list, err
+}
+
 func (c *Client) Balance(ctx context.Context, customer string) (float64, error) {
 	var list []payment.Account
 	if err := c.do(ctx, http.MethodGet, c.PaymentURL+"/accounts", nil, &list); err != nil {

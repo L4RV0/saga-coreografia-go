@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 
 	"saga-coreografia/internal/client"
 	"saga-coreografia/internal/events"
+	"saga-coreografia/internal/inventory"
 	"saga-coreografia/internal/order"
 	"saga-coreografia/internal/platform"
 )
@@ -81,6 +83,38 @@ func expectBalance(t *testing.T, customer string, want float64) {
 	}
 }
 
+// expectKardex verifica la tabla inventory_movements del producto: los tipos de
+// movimiento en orden, que cada fila parta del stock en que quedó la anterior
+// y que la suma de movimientos sea igual al stock actual.
+func expectKardex(t *testing.T, product string, wantTypes ...string) []inventory.Movement {
+	t.Helper()
+	ctx := context.Background()
+	list, err := c.Movements(ctx, product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Reverse(list) // la API devuelve el más reciente primero
+
+	var types []string
+	sum, prev := 0, 0
+	for _, m := range list {
+		types = append(types, m.MovementType)
+		if m.StockBefore != prev || m.StockAfter != m.StockBefore+m.Quantity {
+			t.Fatalf("kardex roto en el movimiento %d: %+v (stock anterior %d)", m.ID, m, prev)
+		}
+		prev = m.StockAfter
+		sum += m.Quantity
+	}
+	if wantTypes != nil && !slices.Equal(types, wantTypes) {
+		t.Fatalf("movimientos = %v, se esperaba %v", types, wantTypes)
+	}
+	stock, _ := c.Stock(ctx, product)
+	if sum != stock {
+		t.Fatalf("la suma de movimientos (%d) no cuadra con el stock (%d)", sum, stock)
+	}
+	return list
+}
+
 // CU-01: todos los pasos tienen éxito.
 func TestCaminoFeliz(t *testing.T) {
 	product, customer := setup(t, 59, 10, 100)
@@ -91,6 +125,7 @@ func TestCaminoFeliz(t *testing.T) {
 	}
 	expectStock(t, product, 9)
 	expectBalance(t, customer, 41)
+	expectKardex(t, product, "CARGA_INICIAL", "RESERVA")
 	if p, err := c.GetPayment(context.Background(), o.ID); err != nil || p.Status != "PAID" {
 		t.Fatalf("pago = %+v (err %v), se esperaba PAID", p, err)
 	}
@@ -106,6 +141,11 @@ func TestPagoFallidoCompensaInventario(t *testing.T) {
 	}
 	expectStock(t, product, 3) // el stock NO queda bloqueado
 	expectBalance(t, customer, 20)
+	// El kardex muestra la salida (RESERVA -1) y la compensación (LIBERACION +1).
+	k := expectKardex(t, product, "CARGA_INICIAL", "RESERVA", "LIBERACION")
+	if k[1].Quantity != -1 || k[2].Quantity != 1 || k[2].OrderID != o.ID || k[2].EventType != "PaymentFailed" {
+		t.Fatalf("movimientos inesperados: %+v", k)
+	}
 	if p, err := c.GetPayment(context.Background(), o.ID); err != nil || p.Status != "FAILED" {
 		t.Fatalf("pago = %+v (err %v), se esperaba FAILED", p, err)
 	}
@@ -121,6 +161,7 @@ func TestSinStockCancelaSinCobrar(t *testing.T) {
 	}
 	expectStock(t, product, 2)
 	expectBalance(t, customer, 1000)
+	expectKardex(t, product, "CARGA_INICIAL", "RECHAZO")
 	if _, err := c.GetPayment(context.Background(), o.ID); err != client.ErrNotFound {
 		t.Fatalf("Payment no debió procesar nada (err %v)", err)
 	}
@@ -157,9 +198,10 @@ func TestEventoDuplicadoEsIdempotente(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	time.Sleep(2 * time.Second)     // margen por si llegara un segundo cobro
-	expectStock(t, product, 8)      // reservado una sola vez
-	expectBalance(t, customer, 942) // cobrado una sola vez
+	time.Sleep(2 * time.Second)                          // margen por si llegara un segundo cobro
+	expectStock(t, product, 8)                           // reservado una sola vez
+	expectBalance(t, customer, 942)                      // cobrado una sola vez
+	expectKardex(t, product, "CARGA_INICIAL", "RESERVA") // una sola reserva
 }
 
 // CU-05: Black Friday, 20 pedidos simultáneos para 5 unidades.
@@ -201,6 +243,14 @@ func TestPedidosConcurrentes(t *testing.T) {
 	}
 	expectStock(t, product, 0)
 	expectBalance(t, customer, 100000-5*10)
+	movs := expectKardex(t, product)
+	kinds := map[string]int{}
+	for _, m := range movs {
+		kinds[m.MovementType]++
+	}
+	if kinds["RESERVA"] != 5 || kinds["RECHAZO"] != 15 {
+		t.Fatalf("kardex %v, se esperaba 5 RESERVA y 15 RECHAZO", kinds)
+	}
 	fmt.Printf("    20 pedidos simultáneos → %d CONFIRMED, %d CANCELLED, stock final 0\n",
 		count[order.Confirmed], count[order.Cancelled])
 }

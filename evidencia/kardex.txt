@@ -1,0 +1,49 @@
+﻿### Kardex de studio-buds (tabla inventory_movements)
+ id |     tipo      | pedido  |    cliente     | cantidad | antes | despues |    evento     |                                                 detalle                                                  
+----+---------------+---------+----------------+----------+-------+---------+---------------+----------------------------------------------------------------------------------------------------------
+  6 | CARGA_INICIAL |         |                |        3 |     0 |       3 |               | Saldo inicial al habilitar el kardex
+ 11 | RESERVA       | ORD-034 | Angel Alvarez  |       -1 |     3 |       2 | OrderCreated  | Reserva de 1 u. para el pedido ORD-034
+ 12 | LIBERACION    | ORD-034 | Angel Alvarez  |        1 |     2 |       3 | PaymentFailed | Compensación: se devuelven 1 u. porque falló el pago (fondos insuficientes (saldo $20.00, total $99.00))
+ 13 | RECHAZO       | ORD-035 | Erick Cevallos |        0 |     3 |       3 | OrderCreated  | Pedido rechazado: se pidieron 5 u. y había 3
+(4 rows)
+
+### Resumen por tipo
+     tipo      | movimientos | unidades 
+---------------+-------------+----------
+ AJUSTE        |           1 |        1
+ CARGA_INICIAL |          13 |      204
+ LIBERACION    |           2 |        2
+ RECHAZO       |          17 |        0
+ RESERVA       |          10 |      -11
+(5 rows)
+
+### Rastreo del pedido ORD-034
+   id    |  customer_id  | product_id  | quantity | amount |  status   |                      reason                       
+---------+---------------+-------------+----------+--------+-----------+---------------------------------------------------
+ ORD-034 | Angel Alvarez | studio-buds |        1 |  99.00 | CANCELLED | fondos insuficientes (saldo $20.00, total $99.00)
+(1 row)
+
+ order_id | product_id  | quantity |  status  
+----------+-------------+----------+----------
+ ORD-034  | studio-buds |        1 | RELEASED
+(1 row)
+
+ id |    tipo    |  producto   | cantidad | antes | despues |    evento     |                                                 detalle                                                  
+----+------------+-------------+----------+-------+---------+---------------+----------------------------------------------------------------------------------------------------------
+ 11 | RESERVA    | studio-buds |       -1 |     3 |       2 | OrderCreated  | Reserva de 1 u. para el pedido ORD-034
+ 12 | LIBERACION | studio-buds |        1 |     2 |       3 | PaymentFailed | Compensación: se devuelven 1 u. porque falló el pago (fondos insuficientes (saldo $20.00, total $99.00))
+(2 rows)
+
+ order_id |  customer_id  | amount | status |                      reason                       
+----------+---------------+--------+--------+---------------------------------------------------
+ ORD-034  | Angel Alvarez |  99.00 | FAILED | fondos insuficientes (saldo $20.00, total $99.00)
+(1 row)
+
+ order-service publicó OrderCreated en saga.order
+
+ inventory-service publicó InventoryReserved en saga.inventory
+ inventory-service publicó StockReleased en saga.inventory
+
+ payment-service publicó PaymentFailed en saga.payment
+
+

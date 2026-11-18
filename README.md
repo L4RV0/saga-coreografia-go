@@ -139,6 +139,26 @@ Los productos y clientes con prefijo `prod-` y `cliente-` los crean las pruebas 
 - **Entrega al menos una vez**: consumidores durables de JetStream; si un servicio está caído, sus eventos lo esperan en el volumen `nats-data`.
 - **Concurrencia segura**: `UPDATE … WHERE stock >= cantidad` y `WHERE balance >= monto` son atómicos en Postgres; nunca se vende ni se cobra de más.
 
+### Movimientos de inventario (kardex)
+
+La tabla `inventory_movements` de la Inventory DB registra **cada transacción que toca el stock**, en la misma transacción que el cambio (si el cambio se guarda, su movimiento también):
+
+| Tipo | Cuándo | Cantidad |
+|---|---|---|
+| `CARGA_INICIAL` | Alta de un producto | + stock inicial |
+| `AJUSTE` | Cambio manual por la API de administración | + o − |
+| `RESERVA` | T2: se aparta stock para un pedido (`OrderCreated`) | − unidades |
+| `LIBERACION` | C2: compensación, el pago falló (`PaymentFailed`) | + unidades |
+| `RECHAZO` | Pedido sin stock suficiente | 0 (no cambia el stock) |
+
+Cada fila guarda el pedido, el cliente, la cantidad, el stock antes y después, el evento de NATS que la provocó y un detalle en texto. La suma de los movimientos de un producto siempre es igual a su stock actual.
+
+```bash
+.\scripts\consultar.ps1 inventory -Sql "SELECT * FROM inventory_movements ORDER BY id DESC LIMIT 20"
+```
+
+También por API: `GET http://localhost:8082/movements?product=studio-buds` o `?order=ORD-002`.
+
 ## 5. Estructura
 
 ```

@@ -29,12 +29,50 @@ WHERE status = 'RELEASED'
 ORDER BY updated_at DESC
 LIMIT 10;
 
-\echo '== 6. Outbox: eventos publicados por Inventory =='
+\echo '== 6. MOVIMIENTOS DE INVENTARIO (kardex): últimas 15 transacciones =='
+-- quantity: negativo = sale stock, positivo = entra, 0 = rechazo sin cambio
+SELECT id, created_at::timestamp(0) AS fecha, movement_type AS tipo, product_id AS producto,
+       order_id AS pedido, customer_id AS cliente, quantity AS cantidad,
+       stock_before AS stock_antes, stock_after AS stock_despues, event_type AS evento
+FROM inventory_movements
+ORDER BY id DESC
+LIMIT 15;
+
+\echo '== 7. Detalle de cada movimiento =='
+SELECT id, movement_type AS tipo, order_id AS pedido, detail AS detalle
+FROM inventory_movements
+ORDER BY id DESC
+LIMIT 15;
+
+\echo '== 8. Kardex de un producto (studio-buds) en orden cronológico =='
+SELECT id, movement_type AS tipo, order_id AS pedido, quantity AS cantidad,
+       stock_before AS antes, stock_after AS despues, detail AS detalle
+FROM inventory_movements
+WHERE product_id = 'studio-buds'
+ORDER BY id;
+
+\echo '== 9. Resumen de movimientos por tipo =='
+SELECT movement_type AS tipo, COUNT(*) AS movimientos, SUM(quantity) AS unidades
+FROM inventory_movements
+GROUP BY movement_type
+ORDER BY movement_type;
+
+\echo '== 10. Cuadre: el stock actual debe ser igual a la suma de sus movimientos =='
+SELECT p.product_id AS producto, p.stock AS stock_actual,
+       COALESCE(SUM(m.quantity), 0) AS suma_movimientos,
+       p.stock = COALESCE(SUM(m.quantity), 0) AS cuadra
+FROM products p
+LEFT JOIN inventory_movements m ON m.product_id = p.product_id
+WHERE p.product_id IN ('mystery-box', 'runner-pro', 'studio-buds')
+GROUP BY p.product_id, p.stock
+ORDER BY p.product_id;
+
+\echo '== 11. Outbox: eventos publicados por Inventory =='
 SELECT id, event->>'type' AS evento, event->>'order_id' AS pedido, topic,
        published_at IS NOT NULL AS publicado
 FROM outbox
 ORDER BY id DESC
 LIMIT 10;
 
-\echo '== 7. Eventos procesados (idempotencia) =='
+\echo '== 12. Eventos procesados (idempotencia) =='
 SELECT COUNT(*) AS eventos_procesados FROM processed_events;

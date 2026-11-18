@@ -43,6 +43,8 @@ if ($Pedido) {
     Invoke-Psql "order" @("-c", "SELECT id, customer_id, product_id, quantity, amount, status, reason FROM orders WHERE id = '$id';")
     Write-Host "=== inventory-db: la reserva de stock ===" -ForegroundColor Green
     Invoke-Psql "inventory" @("-c", "SELECT order_id, product_id, quantity, status FROM reservations WHERE order_id = '$id';")
+    Write-Host "=== inventory-db: movimientos de inventario de este pedido ===" -ForegroundColor Green
+    Invoke-Psql "inventory" @("-c", "SELECT id, movement_type AS tipo, product_id AS producto, quantity AS cantidad, stock_before AS antes, stock_after AS despues, event_type AS evento, detail AS detalle FROM inventory_movements WHERE order_id = '$id' ORDER BY id;")
     Write-Host "=== payment-db: el pago ===" -ForegroundColor Magenta
     Invoke-Psql "payment" @("-c", "SELECT order_id, customer_id, amount, status, reason FROM payments WHERE order_id = '$id';")
     Write-Host "=== Eventos de esta saga en cada outbox ===" -ForegroundColor Yellow
