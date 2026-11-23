@@ -80,6 +80,36 @@ func (c *Client) WaitFinal(ctx context.Context, id string, timeout time.Duration
 	}
 }
 
+// CancelOrder cancela una compra confirmada (inicia las compensaciones).
+func (c *Client) CancelOrder(ctx context.Context, id, reason string) (order.Order, error) {
+	var o order.Order
+	err := c.do(ctx, http.MethodPost, c.OrderURL+"/orders/"+url.PathEscape(id)+"/cancel",
+		map[string]any{"reason": reason}, &o)
+	return o, err
+}
+
+// WaitStatus espera a que el pedido llegue al estado indicado.
+func (c *Client) WaitStatus(ctx context.Context, id string, want order.Status, timeout time.Duration) (order.Order, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		o, err := c.GetOrder(ctx, id)
+		if err == nil && o.Status == want {
+			return o, nil
+		}
+		if time.Now().After(deadline) {
+			return o, fmt.Errorf("el pedido %s está en %s, se esperaba %s", id, o.Status, want)
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+// AccountMovements devuelve los movimientos de dinero de un cliente (más reciente primero).
+func (c *Client) AccountMovements(ctx context.Context, customer string) ([]payment.Movement, error) {
+	var list []payment.Movement
+	err := c.do(ctx, http.MethodGet, c.PaymentURL+"/account-movements?limit=1000&customer="+url.QueryEscape(customer), nil, &list)
+	return list, err
+}
+
 func (c *Client) Stock(ctx context.Context, product string) (int, error) {
 	var list []inventory.Product
 	if err := c.do(ctx, http.MethodGet, c.InventoryURL+"/stock", nil, &list); err != nil {

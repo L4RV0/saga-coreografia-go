@@ -29,7 +29,20 @@ ORDER BY created_at DESC
 LIMIT 10;
 
 \echo '== 6. Sagas que siguen en curso (deberia estar vacio) =='
-SELECT id, customer_id, created_at FROM orders WHERE status = 'PENDING';
+SELECT id, customer_id, status, created_at FROM orders WHERE status IN ('PENDING', 'CANCELLING');
+
+\echo '== 6b. Historial de estados: últimas 15 transacciones =='
+SELECT id, created_at::timestamp(0) AS fecha, order_id AS pedido, from_status AS de, to_status AS a,
+       kind AS tipo, event_type AS evento, detail AS detalle
+FROM order_status_history
+ORDER BY id DESC
+LIMIT 15;
+
+\echo '== 6c. Transacciones compensatorias en Order: cancelaciones (C1) =='
+SELECT id, order_id AS pedido, from_status AS de, to_status AS a, detail AS detalle
+FROM order_status_history
+WHERE kind = 'COMPENSACION'
+ORDER BY id DESC;
 
 \echo '== 7. Outbox: eventos publicados por Order =='
 SELECT id, event->>'type' AS evento, event->>'order_id' AS pedido, topic,

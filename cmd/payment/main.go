@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -41,6 +42,18 @@ func main() {
 				return
 			}
 			platform.WriteJSON(w, http.StatusOK, p)
+		})
+
+		// Movimientos de dinero: GET /account-movements?customer=...&order=...&limit=...
+		mux.HandleFunc("GET /account-movements", func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query()
+			limit, _ := strconv.Atoi(q.Get("limit"))
+			list, err := svc.Movements(r.Context(), q.Get("customer"), q.Get("order"), limit)
+			if err != nil {
+				platform.Error(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			platform.WriteJSON(w, http.StatusOK, list)
 		})
 
 		// Administración: fijar el saldo de un cliente.

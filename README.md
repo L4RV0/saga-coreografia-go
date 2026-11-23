@@ -66,7 +66,24 @@ Ejecutar la demostración, con pausa entre escenarios (`-Reiniciar` borra todo a
 | 2. Pago fallido (Angel Alvarez) | Compensación de la saga | `orders` CANCELLED, reserva `RELEASED`, kardex `RESERVA -1` y `LIBERACION +1`, `payments` FAILED |
 | 3. Sin stock (Erick Cevallos) | Cancelación | `orders` CANCELLED, kardex `RECHAZO 0`, sin registro en `payments` |
 | 4. Black Friday: 5 pedidos para 3 unidades | 3 CONFIRMED, 2 CANCELLED | Stock 3 → 0 sin quedar negativo |
-| 5. ROLLBACK local en cada base | `consultas/rollback-*.sql` | Un cambio dentro de `BEGIN … ROLLBACK` desaparece; un error (CHECK) anula toda la transacción |
+| 5. Cancelación de una compra confirmada (Jeremy) | Compensaciones C3 → C2 → C1 | `account_movements` `REEMBOLSO +59`, pago `REFUNDED`, kardex `LIBERACION +1`, pedido `CONFIRMED → CANCELLING → CANCELLED` |
+| 6. ROLLBACK local en cada base | `consultas/rollback-*.sql` | Un cambio dentro de `BEGIN … ROLLBACK` desaparece; un error (CHECK) anula toda la transacción |
+
+### Transacciones compensatorias
+
+Cada paso de la saga tiene su compensación, y cada base la registra en su propia tabla:
+
+| Paso | Transacción | Compensación | Dónde se ve |
+|---|---|---|---|
+| T1 Order | Crear pedido | **C1** cancelar el pedido | `order_status_history` (kind `COMPENSACION`) |
+| T2 Inventory | Reservar stock | **C2** devolver el stock | `inventory_movements` (`LIBERACION`) |
+| T3 Payment | Cobrar | **C3** reembolsar | `account_movements` (`REEMBOLSO`, kind `COMPENSACION`) |
+
+Si falla el pago se ejecutan C2 y C1. Si el cliente cancela una compra ya confirmada (`POST /orders/{id}/cancel`), se ejecutan las tres en orden inverso: C3 → C2 → C1.
+
+```bash
+.\scripts\consultar.ps1 -Compensaciones
+```
 
 Los archivos `consultas/rollback-order.sql`, `rollback-inventory.sql` y `rollback-payment.sql` también se pueden abrir y ejecutar en VS Code con la extensión de PostgreSQL.
 

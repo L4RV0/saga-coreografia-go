@@ -7,8 +7,10 @@ de Order y, después de cada una, muestra qué cambió en CADA base de datos.
                distribuido de la saga)
   Escenario 3  Cancelación por falta de stock ......... Erick Cevallos
   Escenario 4  Black Friday: 5 pedidos para 3 unidades  Erick Cevallos
-  Escenario 5  ROLLBACK local dentro de cada base de datos
-  Resumen      Pedidos por estado, kardex y cuadre del inventario
+  Escenario 5  Cancelación de una compra confirmada:    Jeremy Delgado
+               compensaciones C3 reembolso -> C2 stock -> C1 pedido
+  Escenario 6  ROLLBACK local dentro de cada base de datos
+  Resumen      Todas las compensaciones, kardex y cuadres
 
 Uso (desde la carpeta saga-coreografia):
   .\scripts\escenarios.ps1               # pausa entre escenarios (para presentar)
@@ -66,13 +68,15 @@ function Estado($producto, $cliente) {
 }
 
 function Saga($id) {
-    Paso "order-db: el pedido"
+    Paso "order-db: el pedido y su historial de estados"
     Consulta order "SELECT id, customer_id AS cliente, product_id AS producto, quantity AS cant, amount AS total, status AS estado, reason AS motivo FROM orders WHERE id = '$id';"
+    Consulta order "SELECT id, from_status AS de, to_status AS a, kind AS tipo, event_type AS evento, detail AS detalle FROM order_status_history WHERE order_id = '$id' ORDER BY id;"
     Paso "inventory-db: reserva y movimientos de inventario de este pedido"
     Consulta inventory "SELECT order_id AS pedido, product_id AS producto, quantity AS cant, status AS estado FROM reservations WHERE order_id = '$id';"
     Consulta inventory "SELECT id, movement_type AS tipo, quantity AS cantidad, stock_before AS antes, stock_after AS despues, event_type AS evento, detail AS detalle FROM inventory_movements WHERE order_id = '$id' ORDER BY id;"
-    Paso "payment-db: el pago"
+    Paso "payment-db: el pago y sus movimientos de dinero"
     Consulta payment "SELECT order_id AS pedido, customer_id AS cliente, amount AS monto, status AS estado, reason AS motivo FROM payments WHERE order_id = '$id';"
+    Consulta payment "SELECT id, movement_type AS tipo, kind AS clase, amount AS monto, balance_before AS saldo_antes, balance_after AS saldo_despues, event_type AS evento, detail AS detalle FROM account_movements WHERE order_id = '$id' ORDER BY id;"
 }
 
 # ---------------------------------------------------------------------------
@@ -151,7 +155,32 @@ Estado "studio-buds" "Erick Cevallos"
 Pausa
 
 # ---------------------------------------------------------------------------
-Titulo "ESCENARIO 5 - ROLLBACK local dentro de cada base de datos"
+Titulo "ESCENARIO 5 - TRANSACCIONES COMPENSATORIAS: Jeremy Delgado cancela su compra $id1"
+Write-Host "La compra ya está CONFIRMED: se cobró, se descontó el stock y se confirmó el"
+Write-Host "pedido, cada cosa en una base distinta. No existe un ROLLBACK que deshaga las"
+Write-Host "tres, así que la saga ejecuta una transacción COMPENSATORIA por cada paso, en"
+Write-Host "orden inverso:  C3 Payment reembolsa  ->  C2 Inventory devuelve el stock  ->  C1 Order cancela"
+Estado "runner-pro" "Jeremy Delgado"
+Paso "POST /orders/$id1/cancel"
+$body = @{ reason = "el cliente se arrepintió de la compra" } | ConvertTo-Json
+$c = Invoke-RestMethod -Method Post -Uri "$OrderUrl/orders/$id1/cancel" -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($body))
+Write-Host "   La API responde: $($c.id) $($c.status) (las compensaciones siguen solas)" -ForegroundColor Gray
+for ($i = 0; $i -lt 100; $i++) {
+    $o = Invoke-RestMethod -Uri "$OrderUrl/orders/$id1"
+    if ($o.status -eq "CANCELLED") { break }
+    Start-Sleep -Milliseconds 150
+}
+Write-Host "   Resultado: $($o.id) $($o.status) - $($o.reason)" -ForegroundColor Yellow
+Saga $id1
+Write-Host "`nCada base registra su compensación:" -ForegroundColor Yellow
+Write-Host "  payment-db   CARGO -59  y luego REEMBOLSO +59 (C3), pago REFUNDED" -ForegroundColor Yellow
+Write-Host "  inventory-db RESERVA -1 y luego LIBERACION +1 (C2), reserva RELEASED" -ForegroundColor Yellow
+Write-Host "  order-db     CONFIRMED -> CANCELLING -> CANCELLED (C1)" -ForegroundColor Yellow
+Estado "runner-pro" "Jeremy Delgado"
+Pausa
+
+# ---------------------------------------------------------------------------
+Titulo "ESCENARIO 6 - ROLLBACK local dentro de cada base de datos"
 Write-Host "Dentro de UNA base, ROLLBACK deshace todo (ACID). Por eso cada paso de la saga"
 Write-Host "es una transacción local. Lo que NO existe es un ROLLBACK que abarque las 3."
 foreach ($base in "order", "inventory", "payment") {
@@ -162,6 +191,8 @@ Pausa
 
 # ---------------------------------------------------------------------------
 Titulo "RESUMEN FINAL"
+Paso "Todas las transacciones compensatorias ejecutadas (.\scripts\consultar.ps1 -Compensaciones)"
+& $consultar -Compensaciones
 Paso "order-db: pedidos por estado"
 Consulta order "SELECT status AS estado, COUNT(*) AS pedidos, SUM(amount) AS monto FROM orders GROUP BY status ORDER BY status;"
 Paso "inventory-db: kardex completo de studio-buds"
@@ -171,4 +202,6 @@ Consulta inventory "SELECT p.product_id AS producto, p.stock AS stock_actual, SU
 Paso "payment-db: pagos por estado y saldos finales"
 Consulta payment "SELECT status AS estado, COUNT(*) AS pagos, SUM(amount) AS monto FROM payments GROUP BY status ORDER BY status;"
 Consulta payment "SELECT customer_id AS cliente, balance AS saldo FROM accounts ORDER BY customer_id;"
+Paso "payment-db: cuadre (saldo actual = suma de movimientos de dinero)"
+Consulta payment "SELECT a.customer_id AS cliente, a.balance AS saldo, SUM(m.amount) AS suma_movimientos, a.balance = SUM(m.amount) AS cuadra FROM accounts a JOIN account_movements m USING (customer_id) GROUP BY a.customer_id, a.balance ORDER BY 1;"
 Write-Host "`nFin de la demostración." -ForegroundColor Green

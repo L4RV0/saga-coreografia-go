@@ -223,10 +223,11 @@ func (s *Service) onOrderEvent(ctx context.Context, e events.Event) error {
 	return nil
 }
 
-// onPaymentEvent: si el pago falló ejecuta la TRANSACCIÓN COMPENSATORIA de T2
-// (devolver el stock) y avisa con StockReleased.
+// onPaymentEvent: TRANSACCIÓN COMPENSATORIA de T2 (devolver el stock) cuando
+// el pago falló (PaymentFailed) o cuando se reembolsó una compra cancelada
+// (PaymentRefunded). Avisa con StockReleased.
 func (s *Service) onPaymentEvent(ctx context.Context, e events.Event) error {
-	if e.Type != events.PaymentFailed {
+	if e.Type != events.PaymentFailed && e.Type != events.PaymentRefunded {
 		return nil
 	}
 	tx, err := s.db.Begin(ctx)
@@ -262,11 +263,14 @@ func (s *Service) onPaymentEvent(ctx context.Context, e events.Event) error {
 		`UPDATE products SET stock = stock + $2 WHERE product_id = $1 RETURNING stock`, product, qty).Scan(&left); err != nil {
 		return err
 	}
+	detail := fmt.Sprintf("C2: se devuelven %d u. porque falló el pago (%s)", qty, e.Reason)
+	if e.Type == events.PaymentRefunded {
+		detail = fmt.Sprintf("C2: se devuelven %d u. porque se reembolsó el pedido (%s)", qty, e.Reason)
+	}
 	if err := recordMovement(ctx, tx, Movement{
 		MovementType: Liberacion, ProductID: product, OrderID: e.OrderID, CustomerID: e.CustomerID,
 		Quantity: qty, StockBefore: left - qty, StockAfter: left,
-		EventID: e.ID, EventType: string(e.Type),
-		Detail: fmt.Sprintf("Compensación: se devuelven %d u. porque falló el pago (%s)", qty, e.Reason),
+		EventID: e.ID, EventType: string(e.Type), Detail: detail,
 	}); err != nil {
 		return err
 	}
@@ -276,7 +280,7 @@ func (s *Service) onPaymentEvent(ctx context.Context, e events.Event) error {
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	logx.Log("inventory", logx.Yellow, "↩ COMPENSANDO %s: liberadas %d u. de %s (quedan %d)", e.OrderID, qty, product, left)
+	logx.Log("inventory", logx.Yellow, "↩ C2 COMPENSACIÓN %s: liberadas %d u. de %s (quedan %d)", e.OrderID, qty, product, left)
 	return nil
 }
 

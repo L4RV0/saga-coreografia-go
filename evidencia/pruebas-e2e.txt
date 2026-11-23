@@ -1,13 +1,15 @@
-=== RUN   TestCaminoFeliz
---- PASS: TestCaminoFeliz (0.39s)
+﻿=== RUN   TestCaminoFeliz
+--- PASS: TestCaminoFeliz (0.52s)
 === RUN   TestPagoFallidoCompensaInventario
---- PASS: TestPagoFallidoCompensaInventario (0.51s)
+--- PASS: TestPagoFallidoCompensaInventario (0.48s)
+=== RUN   TestCancelacionEjecutaCompensaciones
+--- PASS: TestCancelacionEjecutaCompensaciones (0.81s)
 === RUN   TestSinStockCancelaSinCobrar
---- PASS: TestSinStockCancelaSinCobrar (0.40s)
+--- PASS: TestSinStockCancelaSinCobrar (0.34s)
 === RUN   TestEventoDuplicadoEsIdempotente
---- PASS: TestEventoDuplicadoEsIdempotente (2.30s)
+--- PASS: TestEventoDuplicadoEsIdempotente (2.23s)
 === RUN   TestPedidosConcurrentes
     20 pedidos simultáneos → 5 CONFIRMED, 15 CANCELLED, stock final 0
---- PASS: TestPedidosConcurrentes (0.62s)
+--- PASS: TestPedidosConcurrentes (0.57s)
 PASS
-ok  	saga-coreografia/e2e	4.365s
+ok  	saga-coreografia/e2e	5.071s

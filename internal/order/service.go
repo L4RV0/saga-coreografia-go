@@ -20,10 +20,13 @@ import (
 type Status string
 
 const (
-	Pending   Status = "PENDING"   // saga en curso
-	Confirmed Status = "CONFIRMED" // todos los pasos OK
-	Cancelled Status = "CANCELLED" // un paso falló y se compensó
+	Pending    Status = "PENDING"    // saga en curso
+	Confirmed  Status = "CONFIRMED"  // todos los pasos OK
+	Cancelled  Status = "CANCELLED"  // un paso falló o el cliente canceló, y se compensó
+	Cancelling Status = "CANCELLING" // el cliente canceló una compra confirmada: compensaciones en curso
 )
+
+var ErrNotCancellable = errors.New("solo se puede cancelar un pedido CONFIRMED")
 
 // Schema de la Order DB (vive en su propio contenedor y volumen).
 const Schema = `
@@ -42,7 +45,27 @@ CREATE TABLE IF NOT EXISTS orders (
 	reason      TEXT NOT NULL DEFAULT '',
 	created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);`
+);
+-- Historial: una fila por cada transacción que cambia el estado de un pedido.
+CREATE TABLE IF NOT EXISTS order_status_history (
+	id          BIGSERIAL PRIMARY KEY,
+	order_id    TEXT NOT NULL,
+	from_status TEXT,              -- NULL al crearse
+	to_status   TEXT NOT NULL,
+	kind        TEXT NOT NULL,     -- TRANSACCION | COMPENSACION
+	event_type  TEXT,              -- evento que provocó el cambio
+	detail      TEXT NOT NULL DEFAULT '',
+	created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS order_status_history_order ON order_status_history (order_id, id);`
+
+func addHistory(ctx context.Context, tx pgx.Tx, orderID string, from, to Status, kind, eventType, detail string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO order_status_history (order_id, from_status, to_status, kind, event_type, detail)
+		VALUES ($1, NULLIF($2, ''), $3, $4, NULLIF($5, ''), $6)`,
+		orderID, string(from), string(to), kind, eventType, detail)
+	return err
+}
 
 // Catálogo inicial (productos del video). ON CONFLICT DO NOTHING: si el
 // volumen ya tiene datos, se respetan.
@@ -117,6 +140,10 @@ func (s *Service) PlaceOrder(ctx context.Context, customerID, productID string, 
 	if err != nil {
 		return Order{}, err
 	}
+	if err := addHistory(ctx, tx, o.ID, "", Pending, "TRANSACCION", "",
+		fmt.Sprintf("T1: pedido creado (%s x%d, $%.2f)", productID, qty, o.Amount)); err != nil {
+		return Order{}, err
+	}
 
 	err = store.AddToOutbox(ctx, tx, events.TopicOrder, events.New(events.OrderCreated, events.Event{
 		OrderID: o.ID, CustomerID: customerID, ProductID: productID, Quantity: qty, Amount: o.Amount,
@@ -166,20 +193,89 @@ func (s *Service) finish(ctx context.Context, e events.Event, st Status, reason 
 		logx.Log("order", logx.Gray, "evento %s repetido para %s: ignorado (idempotencia)", e.Type, e.OrderID)
 		return tx.Commit(ctx)
 	}
+	var from Status
+	err = tx.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1 FOR UPDATE`, e.OrderID).Scan(&from)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && from != Pending && from != Cancelling) {
+		return tx.Commit(ctx) // pedido desconocido o ya cerrado: nada que hacer
+	}
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx,
-		`UPDATE orders SET status = $2, reason = $3, updated_at = now() WHERE id = $1 AND status = 'PENDING'`,
+		`UPDATE orders SET status = $2, reason = $3, updated_at = now() WHERE id = $1`,
 		e.OrderID, st, reason); err != nil {
+		return err
+	}
+	kind, detail := "TRANSACCION", "T1 completada: el pago se confirmó"
+	if st == Cancelled {
+		kind, detail = "COMPENSACION", "C1: pedido cancelado ("+reason+")"
+	}
+	if err := addHistory(ctx, tx, e.OrderID, from, st, kind, string(e.Type), detail); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if st == Confirmed {
+	switch {
+	case st == Confirmed:
 		logx.Log("order", logx.Blue, "⑥ Pago confirmado → pedido %s CONFIRMED", e.OrderID)
-	} else {
+	case from == Cancelling:
+		logx.Log("order", logx.Red, "↩ C1 COMPENSACIÓN: pedido %s CANCELLED (%s)", e.OrderID, reason)
+	default:
 		logx.Log("order", logx.Red, "↩ CancelOrder: pedido %s CANCELLED (%s)", e.OrderID, reason)
 	}
 	return nil
+}
+
+// CancelOrder cancela una compra YA CONFIRMED. No hay un ROLLBACK que cruce
+// las tres bases, así que se inicia una cadena de compensaciones en orden
+// inverso: Payment reembolsa (C3) → Inventory devuelve el stock (C2) → Order
+// cancela el pedido (C1). Aquí solo se marca CANCELLING y se publica el evento.
+func (s *Service) CancelOrder(ctx context.Context, id, reason string) (Order, error) {
+	if reason == "" {
+		reason = "cancelado por el cliente"
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Order{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var o Order
+	err = tx.QueryRow(ctx, `
+		SELECT id, customer_id, product_id, quantity, amount::float8, status
+		FROM orders WHERE id = $1 FOR UPDATE`, id).
+		Scan(&o.ID, &o.CustomerID, &o.ProductID, &o.Quantity, &o.Amount, &o.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Order{}, ErrNotFound
+	}
+	if err != nil {
+		return Order{}, err
+	}
+	if o.Status != Confirmed {
+		return Order{}, fmt.Errorf("%w (está %s)", ErrNotCancellable, o.Status)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE orders SET status = 'CANCELLING', reason = $2, updated_at = now() WHERE id = $1`, id, reason); err != nil {
+		return Order{}, err
+	}
+	if err := addHistory(ctx, tx, id, Confirmed, Cancelling, "COMPENSACION", "",
+		"Inicio de compensaciones: "+reason); err != nil {
+		return Order{}, err
+	}
+	ev := events.New(events.OrderCancellationRequested, events.Event{
+		OrderID: o.ID, CustomerID: o.CustomerID, ProductID: o.ProductID, Quantity: o.Quantity, Amount: o.Amount,
+	})
+	ev.Reason = reason
+	if err := store.AddToOutbox(ctx, tx, events.TopicOrder, ev); err != nil {
+		return Order{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Order{}, err
+	}
+	logx.Log("order", logx.Yellow, "✋ Pedido %s: %s → CANCELLING, se inician las compensaciones", id, reason)
+	return s.Get(ctx, id)
 }
 
 // Get devuelve un pedido.

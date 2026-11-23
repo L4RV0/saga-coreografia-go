@@ -151,6 +151,59 @@ func TestPagoFallidoCompensaInventario(t *testing.T) {
 	}
 }
 
+// CU-09: el cliente cancela una compra CONFIRMED. Se ejecutan las tres
+// transacciones compensatorias en orden inverso: C3 reembolso → C2 stock → C1 pedido.
+func TestCancelacionEjecutaCompensaciones(t *testing.T) {
+	ctx := context.Background()
+	product, customer := setup(t, 59, 10, 100)
+	o := place(t, customer, product, 1)
+	if o.Status != order.Confirmed {
+		t.Fatalf("estado = %s, se esperaba CONFIRMED", o.Status)
+	}
+	expectStock(t, product, 9)
+	expectBalance(t, customer, 41)
+
+	got, err := c.CancelOrder(ctx, o.ID, "el cliente se arrepintió")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != order.Cancelling {
+		t.Fatalf("la API debe responder CANCELLING, respondió %s", got.Status)
+	}
+	if _, err := c.WaitStatus(ctx, o.ID, order.Cancelled, 15*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cada base quedó como antes de la compra, con su compensación registrada.
+	expectStock(t, product, 10)
+	expectBalance(t, customer, 100)
+	if p, err := c.GetPayment(ctx, o.ID); err != nil || p.Status != "REFUNDED" {
+		t.Fatalf("pago = %+v (err %v), se esperaba REFUNDED", p, err)
+	}
+	expectKardex(t, product, "CARGA_INICIAL", "RESERVA", "LIBERACION")
+
+	movs, err := c.AccountMovements(ctx, customer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Reverse(movs)
+	var types []string
+	for _, m := range movs {
+		types = append(types, m.MovementType)
+	}
+	if !slices.Equal(types, []string{"SALDO_INICIAL", "CARGO", "REEMBOLSO"}) {
+		t.Fatalf("movimientos de dinero = %v", types)
+	}
+	if movs[1].Amount != -59 || movs[2].Amount != 59 || movs[2].Kind != "COMPENSACION" {
+		t.Fatalf("cargo/reembolso inesperados: %+v", movs)
+	}
+
+	// Una compra ya cancelada no se puede volver a cancelar.
+	if _, err := c.CancelOrder(ctx, o.ID, ""); err == nil {
+		t.Fatal("cancelar dos veces debió fallar")
+	}
+}
+
 // CU-03: no hay stock; Payment nunca interviene.
 func TestSinStockCancelaSinCobrar(t *testing.T) {
 	product, customer := setup(t, 99, 2, 1000)

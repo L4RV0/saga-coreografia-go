@@ -57,6 +57,26 @@ func main() {
 			platform.WriteJSON(w, http.StatusOK, o)
 		})
 
+		// POST /orders/{id}/cancel {"reason": "..."} → 202 + pedido CANCELLING.
+		// Inicia las transacciones compensatorias (reembolso, stock, cancelación).
+		mux.HandleFunc("POST /orders/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Reason string `json:"reason"`
+			}
+			_ = platform.ReadJSON(r, &req) // el cuerpo es opcional
+			o, err := svc.CancelOrder(r.Context(), r.PathValue("id"), req.Reason)
+			switch {
+			case errors.Is(err, order.ErrNotFound):
+				platform.Error(w, http.StatusNotFound, err.Error())
+			case errors.Is(err, order.ErrNotCancellable):
+				platform.Error(w, http.StatusConflict, err.Error())
+			case err != nil:
+				platform.Error(w, http.StatusInternalServerError, err.Error())
+			default:
+				platform.WriteJSON(w, http.StatusAccepted, o)
+			}
+		})
+
 		mux.HandleFunc("GET /orders", func(w http.ResponseWriter, r *http.Request) {
 			list, err := svc.List(r.Context())
 			if err != nil {

@@ -9,6 +9,7 @@ Ejemplos (desde la carpeta saga-coreografia):
   .\scripts\consultar.ps1 payment                  # corre consultas\payment.sql
   .\scripts\consultar.ps1 order -Sql "SELECT id, status FROM orders"
   .\scripts\consultar.ps1 -Pedido ORD-002          # sigue un pedido por las 3 bases
+  .\scripts\consultar.ps1 -Compensaciones          # todas las transacciones compensatorias
   .\scripts\consultar.ps1 payment -Consola         # abre psql interactivo (salir con \q)
 #>
 param(
@@ -16,6 +17,7 @@ param(
     [string]$Base,
     [string]$Sql,
     [string]$Pedido,
+    [switch]$Compensaciones,
     [switch]$Consola
 )
 
@@ -36,17 +38,33 @@ function Invoke-Psql($nombre, [string[]]$argumentos) {
     if ($LASTEXITCODE -ne 0) { throw "La consulta en $($b.Contenedor) falló. ¿Están encendidos los contenedores? (docker compose up -d)" }
 }
 
+# Todas las transacciones compensatorias registradas en las 3 bases de datos.
+if ($Compensaciones) {
+    Write-Host "`nTRANSACCIONES COMPENSATORIAS (deshacen a nivel de negocio un paso ya confirmado)" -ForegroundColor Yellow
+    Write-Host "`n=== payment-db: C3 - reembolsos (deshacen T3, el cobro) ===" -ForegroundColor Magenta
+    Invoke-Psql "payment" @("-c", "SELECT id, created_at::timestamp(0) AS fecha, order_id AS pedido, customer_id AS cliente, amount AS monto, balance_before AS saldo_antes, balance_after AS saldo_despues, event_type AS evento, detail AS detalle FROM account_movements WHERE kind = 'COMPENSACION' ORDER BY id;")
+    Write-Host "=== inventory-db: C2 - liberaciones de stock (deshacen T2, la reserva) ===" -ForegroundColor Green
+    Invoke-Psql "inventory" @("-c", "SELECT id, created_at::timestamp(0) AS fecha, order_id AS pedido, product_id AS producto, quantity AS cantidad, stock_before AS antes, stock_after AS despues, event_type AS evento, detail AS detalle FROM inventory_movements WHERE movement_type = 'LIBERACION' ORDER BY id;")
+    Write-Host "=== order-db: C1 - cancelaciones de pedidos (deshacen T1) ===" -ForegroundColor Cyan
+    Invoke-Psql "order" @("-c", "SELECT id, created_at::timestamp(0) AS fecha, order_id AS pedido, from_status AS de, to_status AS a, event_type AS evento, detail AS detalle FROM order_status_history WHERE kind = 'COMPENSACION' ORDER BY id;")
+    exit 0
+}
+
 # Seguir un pedido (una saga) a través de las 3 bases de datos.
 if ($Pedido) {
     $id = $Pedido.Replace("'", "''")
     Write-Host "`n=== order-db: el pedido ===" -ForegroundColor Cyan
     Invoke-Psql "order" @("-c", "SELECT id, customer_id, product_id, quantity, amount, status, reason FROM orders WHERE id = '$id';")
+    Write-Host "=== order-db: historial de estados (transacciones y compensaciones) ===" -ForegroundColor Cyan
+    Invoke-Psql "order" @("-c", "SELECT id, from_status AS de, to_status AS a, kind AS tipo, event_type AS evento, detail AS detalle FROM order_status_history WHERE order_id = '$id' ORDER BY id;")
     Write-Host "=== inventory-db: la reserva de stock ===" -ForegroundColor Green
     Invoke-Psql "inventory" @("-c", "SELECT order_id, product_id, quantity, status FROM reservations WHERE order_id = '$id';")
     Write-Host "=== inventory-db: movimientos de inventario de este pedido ===" -ForegroundColor Green
     Invoke-Psql "inventory" @("-c", "SELECT id, movement_type AS tipo, product_id AS producto, quantity AS cantidad, stock_before AS antes, stock_after AS despues, event_type AS evento, detail AS detalle FROM inventory_movements WHERE order_id = '$id' ORDER BY id;")
     Write-Host "=== payment-db: el pago ===" -ForegroundColor Magenta
     Invoke-Psql "payment" @("-c", "SELECT order_id, customer_id, amount, status, reason FROM payments WHERE order_id = '$id';")
+    Write-Host "=== payment-db: movimientos de dinero de este pedido ===" -ForegroundColor Magenta
+    Invoke-Psql "payment" @("-c", "SELECT id, movement_type AS tipo, kind AS clase, amount AS monto, balance_before AS saldo_antes, balance_after AS saldo_despues, event_type AS evento, detail AS detalle FROM account_movements WHERE order_id = '$id' ORDER BY id;")
     Write-Host "=== Eventos de esta saga en cada outbox ===" -ForegroundColor Yellow
     foreach ($n in "order", "inventory", "payment") {
         Invoke-Psql $n @("-t", "-c", "SELECT '$n-service publicó ' || (event->>'type') || ' en ' || topic FROM outbox WHERE event->>'order_id' = '$id' ORDER BY id;")

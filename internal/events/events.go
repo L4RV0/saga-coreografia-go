@@ -20,8 +20,9 @@ const (
 type Type string
 
 const (
-	// Publicado por Order en saga.order.
-	OrderCreated Type = "OrderCreated"
+	// Publicados por Order en saga.order.
+	OrderCreated               Type = "OrderCreated"
+	OrderCancellationRequested Type = "OrderCancellationRequested" // el cliente cancela una compra confirmada
 
 	// Publicados por Inventory en saga.inventory.
 	InventoryReserved Type = "InventoryReserved" // transacción local T2 OK
@@ -31,6 +32,7 @@ const (
 	// Publicados por Payment en saga.payment.
 	PaymentProcessed Type = "PaymentProcessed" // transacción local T3 OK
 	PaymentFailed    Type = "PaymentFailed"    // T3 falló -> dispara compensaciones
+	PaymentRefunded  Type = "PaymentRefunded"  // transacción COMPENSATORIA de T3 (reembolso)
 )
 
 // Event es el mensaje que viaja por el broker (serializado como JSON).
