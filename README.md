@@ -85,6 +85,20 @@ Si falla el pago se ejecutan C2 y C1. Si el cliente cancela una compra ya confir
 .\scripts\consultar.ps1 -Compensaciones
 ```
 
+Hacerlo a mano, paso a paso:
+
+```bash
+.\scripts\comprar.ps1 "Jeremy Delgado" runner-pro 1
+```
+
+```bash
+.\scripts\cancelar.ps1 ORD-009 "el cliente se arrepintió"
+```
+
+```bash
+.\scripts\consultar.ps1 -Pedido ORD-009
+```
+
 Los archivos `consultas/rollback-order.sql`, `rollback-inventory.sql` y `rollback-payment.sql` también se pueden abrir y ejecutar en VS Code con la extensión de PostgreSQL.
 
 ### Consultas a las bases de datos
