@@ -19,7 +19,7 @@ param(
     [switch]$Consola
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"  # Docker y psql escriben progreso en stderr; se valida $LASTEXITCODE
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Set-Location (Join-Path $PSScriptRoot "..")
 

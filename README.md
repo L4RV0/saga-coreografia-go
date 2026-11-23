@@ -46,6 +46,30 @@ docker compose down -v
 
 > Si `go run .` dice `go.mod file not found`, estás en la carpeta equivocada: entra primero a `saga-coreografia`.
 
+### Demostración guiada (escenarios con cambios en las bases de datos)
+
+Borrar todos los datos y empezar desde cero (bases vacías con los datos iniciales):
+
+```bash
+.\scripts\reiniciar.ps1
+```
+
+Ejecutar la demostración, con pausa entre escenarios (`-Reiniciar` borra todo antes, `-SinPausa` corre todo seguido):
+
+```bash
+.\scripts\escenarios.ps1 -Reiniciar
+```
+
+| Escenario | Qué pasa | Qué se ve en las bases |
+|---|---|---|
+| 1. Compra exitosa (Jeremy Delgado) | CONFIRMED | `orders` CONFIRMED, kardex `RESERVA -1`, `payments` PAID, saldo −$59 |
+| 2. Pago fallido (Angel Alvarez) | Compensación de la saga | `orders` CANCELLED, reserva `RELEASED`, kardex `RESERVA -1` y `LIBERACION +1`, `payments` FAILED |
+| 3. Sin stock (Erick Cevallos) | Cancelación | `orders` CANCELLED, kardex `RECHAZO 0`, sin registro en `payments` |
+| 4. Black Friday: 5 pedidos para 3 unidades | 3 CONFIRMED, 2 CANCELLED | Stock 3 → 0 sin quedar negativo |
+| 5. ROLLBACK local en cada base | `consultas/rollback-*.sql` | Un cambio dentro de `BEGIN … ROLLBACK` desaparece; un error (CHECK) anula toda la transacción |
+
+Los archivos `consultas/rollback-order.sql`, `rollback-inventory.sql` y `rollback-payment.sql` también se pueden abrir y ejecutar en VS Code con la extensión de PostgreSQL.
+
 ### Consultas a las bases de datos
 
 Cada base vive en su contenedor; `scripts/consultar.ps1` entra con `docker compose exec` y ejecuta `psql` (el cliente de PostgreSQL que trae la imagen). Las consultas están en `consultas/*.sql`.
